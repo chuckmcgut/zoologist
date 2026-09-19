@@ -1,0 +1,149 @@
+# Zoologist example configuration. Copy to config/zoologist.toml and edit.
+# Check it with:  zoologist check-config --config config/zoologist.toml
+
+[station]
+name = "Home"
+timezone = "America/New_York"
+country = "USA"            # ISO-3166 alpha-3, used by the SpeciesNet geofence
+admin1_region = "NY"       # state/province, optional
+
+[server]
+bind = "0.0.0.0:8090"
+data_dir = "/data"
+static_dir = "/app/static"
+cors_allow_origins = ["*"]
+
+[video]
+decoder = "rust"           # "rust" | "ffmpeg"  (chosen in plan Step 0.4)
+ffmpeg_path = "ffmpeg"     # only used when decoder = "ffmpeg"
+analysis_max_width = 1536  # frames wider than this are scaled down for analysis; wider finds
+                           # smaller/distant animals (the detector's cost barely changes)
+
+[inference]
+detector = "md-sorrel"     # key into [models.*] (see docs/MODELS.md and docs/PERFORMANCE.md)
+workers = 3                # detector threads (each ~1 core while busy)
+queue_capacity = 12        # pending regions; the oldest is dropped when full
+max_regions_per_frame = 2
+keepalive_seconds = 2
+
+[models.md-sorrel]
+path = "/models/md_v1000_sorrel_320.onnx"
+kind = "yolov8"            # yolov5 | yolov8 | yolo_e2e   (output layout, see docs/MODELS.md)
+classes = "megadetector"   # megadetector | coco
+input_size = 320
+score_threshold = 0.35
+
+# Faster (about 2x) but less accurate; use if the CPU cannot keep up.
+[models.md-spruce]
+path = "/models/md_v1000_spruce_320.onnx"
+kind = "yolov5"
+classes = "megadetector"
+input_size = 320
+score_threshold = 0.35
+
+[species]
+enabled = true
+model = "speciesnet"       # speciesnet | bioclip
+path = "/models/speciesnet.onnx"
+labels = "/models/speciesnet_labels.txt"
+taxonomy = "/models/speciesnet_taxonomy.txt"
+geofence = "/models/speciesnet_geofence.json"
+workers = 1
+max_crops_per_event = 3
+min_score = 0.65           # SpeciesNet's own threshold for naming a species or a group
+# bioclip only:
+# species_list = "/config/my_species.txt"
+# text_embeddings = "/models/bioclip_text_embeddings.f32"
+
+[motion]
+analysis_width = 320       # Y plane is downscaled to this width
+threshold = 25             # per-pixel brightness difference (0-255)
+contour_area = 0.002       # min changed fraction of the frame for one motion box
+frame_alpha = 0.02         # background learning rate
+lightning_fraction = 0.5   # >50% of pixels changed at once => reset, no motion
+motion_event_min_seconds = 3
+motion_event_cooldown_seconds = 120
+
+[tracking]
+min_hits = 3               # detections before a track becomes an event
+max_missed_seconds = 5     # track ends after this long without a match
+iou_match = 0.3
+min_event_score = 0.55     # median score over the track
+
+[recording]
+segment_seconds = 10
+keep_segments_hours = 6
+pre_capture_seconds = 5
+post_capture_seconds = 5
+
+[retention]
+clips_days = 30
+clips_max_total_mb = 100000
+
+[[reolink_hubs]]
+id = "home-hub"
+url = "http://192.168.1.10"      # enable HTTP on the Hub; a pure-Rust build has no TLS client
+user = "zoologist"               # a dedicated low-privilege Hub user with playback rights
+password = "change-me"
+poll_seconds = 30
+lookback_minutes = 30            # on startup, import recordings this far back
+analyse_stream = "sub"           # the H.264 sub recording is analysed and kept as the clip
+                                 # (the main recording is often H.265, which browsers cannot play)
+no_detection = "motion"          # "motion" = keep as a motion event | "discard"
+clip_codec_fallback = "sub"      # reserved: main-stream clips are not implemented yet
+
+# --- Reolink wired camera over HTTP-FLV (preferred for <= 5 MP) ---
+[[cameras]]
+id = "driveway"
+name = "Driveway"
+kind = "stream"
+transport = "flv"                # "flv" | "rtsp"
+detect_url = "http://192.168.1.20/flv?port=1935&app=bcs&stream=channel0_sub.bcs&user=USER&password=PASS"
+record_url = "http://192.168.1.20/flv?port=1935&app=bcs&stream=channel0_main.bcs&user=USER&password=PASS"
+detect_fps = 5                   # frames above this rate are decoded but not analysed
+record = true
+labels = ["person", "vehicle", "animal", "motion"]
+# motion_mask = [[0.0,0.0, 0.3,0.0, 0.3,0.08, 0.0,0.08]]   # e.g. the timestamp overlay
+
+# --- Reolink 4K/8MP wired camera over RTSP (main stream may be H.265) ---
+[[cameras]]
+id = "backyard"
+name = "Backyard"
+kind = "stream"
+transport = "rtsp"
+detect_url = "rtsp://USER:PASS@192.168.1.21:554/h264Preview_01_sub"   # newer firmware: Preview_01_sub
+record_url = "rtsp://USER:PASS@192.168.1.21:554/h264Preview_01_main"
+detect_fps = 5
+record = true
+
+# --- Wyze with RTSP firmware (wz_mini_hacks shown) or via docker-wyze-bridge ---
+[[cameras]]
+id = "garden-wyze"
+name = "Garden (Wyze)"
+kind = "stream"
+transport = "rtsp"
+detect_url = "rtsp://USER:PASS@192.168.1.30:8554/video2_unicast"      # SD
+record_url = "rtsp://USER:PASS@192.168.1.30:8554/video1_unicast"      # HD
+detect_fps = 5
+record = true
+
+# --- Always-on camera connected to the Home Hub: watched live through the Hub's RTSP ---
+# `hub` puts the Hub's user and password into the URLs, so they are written only once.
+# Channel 0 on the Hub is "01" in the path. Many Hub cameras send H.265 on the main stream,
+# so record the H.264 sub stream.
+[[cameras]]
+id = "shed"
+name = "Shed"
+kind = "stream"
+transport = "rtsp"
+hub = "home-hub"
+detect_url = "rtsp://192.168.1.10:554/h264Preview_01_sub"
+record_url = "rtsp://192.168.1.10:554/h264Preview_01_sub"
+
+# --- Reolink battery camera behind the Home Hub (no live stream) ---
+[[cameras]]
+id = "trail-argus"
+name = "Trail (Argus)"
+kind = "hub_clips"
+hub = "home-hub"
+channel = 0                      # Hub API channel number (0-based)

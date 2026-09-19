@@ -1,0 +1,11 @@
+/target
+/spikes/*/target
+/data
+/models/*
+!/models/SHA256SUMS
+/tools/fixtures/owner
+/tools/convert_models/.venv
+*.det.jpg
+probe_*.jpg
+.DS_Store
+/config/zoologist.toml

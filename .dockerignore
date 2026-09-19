@@ -1,0 +1,11 @@
+# Keep the build context small: only sources, static files and the lock file are needed.
+.git
+target
+spikes/*/target
+data
+models
+tools/convert_models/.venv
+tools/fixtures/owner
+config/zoologist.toml
+**/*.det.jpg
+**/.DS_Store

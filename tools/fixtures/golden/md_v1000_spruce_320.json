@@ -1,0 +1,99 @@
+{
+ "bird_feeder.jpg": [
+  {
+   "class": "person",
+   "score": 0.607,
+   "bbox": [
+    0.0,
+    0.00333,
+    0.99424,
+    1.0
+   ]
+  }
+ ],
+ "car.jpg": [
+  {
+   "class": "vehicle",
+   "score": 0.5139,
+   "bbox": [
+    0.12222,
+    0.34092,
+    0.88917,
+    0.72855
+   ]
+  }
+ ],
+ "cat.jpg": [],
+ "coyote.jpg": [
+  {
+   "class": "animal",
+   "score": 0.7884,
+   "bbox": [
+    0.76127,
+    0.49283,
+    0.95328,
+    0.62586
+   ]
+  }
+ ],
+ "deer.jpg": [
+  {
+   "class": "animal",
+   "score": 0.9402,
+   "bbox": [
+    0.00215,
+    0.04012,
+    0.42827,
+    1.0
+   ]
+  }
+ ],
+ "fox.jpg": [
+  {
+   "class": "animal",
+   "score": 0.9095,
+   "bbox": [
+    0.23975,
+    0.50245,
+    0.42777,
+    0.65026
+   ]
+  }
+ ],
+ "person.jpg": [],
+ "ringtail_night.jpg": [
+  {
+   "class": "animal",
+   "score": 0.5832,
+   "bbox": [
+    0.79956,
+    0.32717,
+    0.90693,
+    0.45217
+   ]
+  }
+ ],
+ "ringtail_night_ir.jpg": [],
+ "turkey.jpg": [
+  {
+   "class": "animal",
+   "score": 0.867,
+   "bbox": [
+    0.0346,
+    0.0793,
+    0.91099,
+    0.96714
+   ]
+  },
+  {
+   "class": "animal",
+   "score": 0.228,
+   "bbox": [
+    0.03049,
+    0.55276,
+    0.9102,
+    0.95321
+   ]
+  }
+ ]
+}

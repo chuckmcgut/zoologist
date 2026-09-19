@@ -1,0 +1,42 @@
+[package]
+name = "zoologist-server"
+description = "The zoologist binary: pipeline wiring, CLI tools, HTTP API and web UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "zoologist"
+path = "src/main.rs"
+
+[dependencies]
+zoologist-core.workspace = true
+zoologist-video.workspace = true
+zoologist-vision.workspace = true
+zoologist-store.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+image.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+tower.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+rustix.workspace = true
+rpassword.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+http-body-util.workspace = true

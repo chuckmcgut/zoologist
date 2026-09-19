@@ -1,0 +1,89 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/zoologist-core",
+    "crates/zoologist-video",
+    "crates/zoologist-vision",
+    "crates/zoologist-store",
+    "crates/zoologist-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.91"
+publish = false
+
+[workspace.dependencies]
+# internal
+zoologist-core = { path = "crates/zoologist-core" }
+zoologist-video = { path = "crates/zoologist-video" }
+zoologist-vision = { path = "crates/zoologist-vision" }
+zoologist-store = { path = "crates/zoologist-store" }
+
+# general
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "fs", "io-util", "process"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+
+# http
+axum = "0.8"
+tower-http = { version = "0.7", features = ["fs", "cors", "compression-gzip", "trace"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+ureq = { version = "3.4", default-features = false, features = ["json"] }
+
+# video
+retina = { version = "0.4.20", default-features = false }   # enable "h265" only if an H.265 stream is recorded
+url = "2"
+h264-reader = "0.9"
+rusty_h264-decoder = "0.16"   # pure-Rust H.264 decoder (Phase 0 decides if it is good enough)
+
+# vision / images
+tract-onnx = "0.23"
+fast_image_resize = "6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+imageproc = { version = "0.27", default-features = false }
+ab_glyph = "0.2"
+
+# Reolink Hub login (digest + AES-128-CFB, pure-Rust RustCrypto crates)
+md-5 = "0.10"
+aes = "0.8"
+cfb-mode = "0.8"
+base64 = "0.23"
+getrandom = "0.4"
+sha1 = "0.10"                    # ONVIF WS-Security password digest
+rpassword = "7"                  # hidden password prompt for `zoologist onvif`
+
+# system
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }   # statvfs for free disk space
+
+# storage
+redb = "4"
+
+# testing
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
+# panic stays "unwind" so a panicking worker thread can be logged and restarted (DECISIONS #4).
+
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,37 @@
+[package]
+name = "zoologist-video"
+description = "Camera ingest (RTSP, HTTP-FLV, Reolink Hub), H.264 decoding, MP4 recording and clips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoologist-core.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+h264-reader.workspace = true
+rusty_h264-decoder.workspace = true
+retina.workspace = true
+url.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono-tz.workspace = true
+ureq.workspace = true
+md-5.workspace = true
+aes.workspace = true
+cfb-mode.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+axum.workspace = true

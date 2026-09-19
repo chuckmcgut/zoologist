@@ -1,0 +1,12 @@
+# Dev-time only: exports the models to ONNX. Nothing here ships in the Docker image.
+# Install in this order (a combined install hits an onnx version conflict), see scripts/fetch-models.sh.
+torch
+torchvision
+ultralytics
+megadetector
+speciesnet
+onnx
+onnxruntime
+onnxslim
+pillow
+numpy

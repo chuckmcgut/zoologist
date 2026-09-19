@@ -1,0 +1,57 @@
+# cargo deny check: licences, security advisories, banned crates and sources.
+# The ban list enforces the pure-Rust policy (IMPLEMENTATION_PLAN.md §0 rules 2-4, DECISIONS #1).
+# scripts/check-pure-rust.sh catches anything not named here (-sys crates, `cc` users).
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "CDLA-Permissive-2.0",
+  "0BSD",
+  "BSL-1.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+  { crate = "ort", reason = "FFI to ONNX Runtime; optional feature only with owner approval (plan Step 11.5)" },
+  { crate = "ort-sys", reason = "FFI to ONNX Runtime" },
+  { crate = "openssl", reason = "FFI to OpenSSL; the build has no TLS client" },
+  { crate = "openssl-sys", reason = "FFI to OpenSSL" },
+  { crate = "native-tls", reason = "FFI to the platform TLS library" },
+  { crate = "ring", reason = "C and assembly crypto; the build has no TLS client" },
+  { crate = "aws-lc-sys", reason = "FFI to AWS-LC" },
+  { crate = "aws-lc-rs", reason = "FFI to AWS-LC" },
+  { crate = "libsqlite3-sys", reason = "SQLite is C; storage uses redb (DECISIONS #2)" },
+  { crate = "ffmpeg-next", reason = "FFI to libav; ffmpeg may only run as a child process" },
+  { crate = "ffmpeg-sys-next", reason = "FFI to libav" },
+  { crate = "opencv", reason = "FFI to OpenCV" },
+  { crate = "openh264", reason = "FFI to Cisco openh264; decoding is pure Rust or an ffmpeg process" },
+  { crate = "openh264-sys2", reason = "FFI to Cisco openh264" },
+  { crate = "gstreamer", reason = "FFI to GStreamer" },
+  { crate = "tch", reason = "FFI to libtorch" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

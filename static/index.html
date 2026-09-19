@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zoologist</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="favicon.svg" alt="" width="28" height="28">
+      <h1 id="station">Zoologist</h1>
+    </div>
+    <div id="status" class="status" role="status" aria-live="polite">Connecting…</div>
+  </header>
+
+  <nav class="filters" aria-label="Filters">
+    <label class="select">
+      <span class="muted">Camera</span>
+      <select id="camera-filter">
+        <option value="">All cameras</option>
+      </select>
+    </label>
+    <div class="segmented" role="group" aria-label="Time window" id="window-buttons">
+      <button type="button" data-window="1h">1h</button>
+      <button type="button" data-window="6h">6h</button>
+      <button type="button" data-window="24h" aria-pressed="true">24h</button>
+      <button type="button" data-window="7d">7d</button>
+      <button type="button" data-window="30d">30d</button>
+    </div>
+  </nav>
+
+  <main class="grid">
+    <section class="card" aria-labelledby="activity-title">
+      <div class="card-head">
+        <h2 id="activity-title">Activity</h2>
+        <span class="muted small">click a bar to filter</span>
+      </div>
+      <div id="activity-chart" class="chart" aria-live="polite"></div>
+    </section>
+
+    <section class="card" aria-labelledby="animals-title">
+      <div class="card-head">
+        <h2 id="animals-title">Animals</h2>
+        <span class="muted small">click a bar to filter</span>
+      </div>
+      <div id="animals-chart" class="chart" aria-live="polite"></div>
+    </section>
+
+    <section class="card wide" aria-labelledby="hourly-title">
+      <div class="card-head">
+        <h2 id="hourly-title">By hour</h2>
+        <input type="date" id="hourly-date" aria-label="Day to show">
+      </div>
+      <div id="hourly-chart" class="chart"></div>
+      <ul id="hourly-legend" class="legend"></ul>
+    </section>
+
+    <section class="card wide" aria-labelledby="events-title">
+      <div class="card-head">
+        <h2 id="events-title">Recent events</h2>
+        <span id="live" class="live" data-state="connecting">connecting</span>
+      </div>
+      <div class="chips" role="group" aria-label="Show events of type" id="label-chips">
+        <button type="button" data-label="" aria-pressed="true">All</button>
+        <button type="button" data-label="person">🧍 Person</button>
+        <button type="button" data-label="vehicle">🚗 Vehicle</button>
+        <button type="button" data-label="animal">🦌 Animal</button>
+        <button type="button" data-label="motion">〰️ Motion</button>
+        <button type="button" id="species-chip" class="species-chip" hidden aria-label="Remove species filter"></button>
+      </div>
+      <div id="events" class="tiles"></div>
+      <p id="events-empty" class="empty" hidden>No events yet. New ones appear here as they happen.</p>
+      <div class="more"><button type="button" id="load-more" class="button" hidden>Load more</button></div>
+    </section>
+
+    <section class="card wide" aria-labelledby="cameras-title">
+      <div class="card-head">
+        <h2 id="cameras-title">Cameras</h2>
+        <span id="cameras-count" class="muted"></span>
+      </div>
+      <div id="cameras" class="cams"></div>
+      <p id="cameras-empty" class="empty" hidden>No cameras configured.</p>
+    </section>
+
+    <section class="card wide" aria-labelledby="species-title">
+      <div class="card-head">
+        <h2 id="species-title">Species</h2>
+        <span id="species-count" class="muted"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="species">
+          <thead>
+            <tr><th scope="col">Species</th><th scope="col" class="num">Detections</th><th scope="col">Last seen</th><th scope="col" class="num">Best score</th><th scope="col">Best clip</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="species-empty" class="empty" hidden>No animals seen in this window.</p>
+    </section>
+  </main>
+
+  <dialog id="viewer" aria-labelledby="viewer-title">
+    <form method="dialog" class="viewer-close"><button aria-label="Close">×</button></form>
+    <h3 id="viewer-title"></h3>
+    <p id="viewer-meta" class="muted"></p>
+    <p id="viewer-species" class="muted small"></p>
+    <video id="viewer-video" controls autoplay muted playsinline preload="metadata"></video>
+    <p id="viewer-clip-note" class="note" hidden></p>
+    <img id="viewer-snapshot" alt="" width="1280" height="720">
+    <div class="viewer-nav">
+      <button type="button" id="viewer-prev" class="button" aria-label="Previous event">← Newer</button>
+      <button type="button" id="viewer-next" class="button" aria-label="Next event">Older →</button>
+    </div>
+  </dialog>
+  <dialog id="live-view" aria-labelledby="live-title">
+    <form method="dialog" class="viewer-close"><button aria-label="Close">×</button></form>
+    <h3 id="live-title"></h3>
+    <p id="live-meta" class="muted"><span class="live-dot">LIVE</span> <span id="live-status">connecting…</span></p>
+    <video id="live-video" muted autoplay playsinline></video>
+    <p id="live-note" class="note" hidden></p>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,21 @@
+[package]
+name = "zoologist-store"
+description = "redb persistence for events and recording segments, chart statistics and retention"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoologist-core.workspace = true
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

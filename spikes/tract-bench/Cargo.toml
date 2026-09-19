@@ -1,0 +1,17 @@
+# Phase 0 measuring tool (plan Step 0.3). Its own workspace: never part of the product build.
+[workspace]
+
+[package]
+name = "tract-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tract-onnx = "0.23"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

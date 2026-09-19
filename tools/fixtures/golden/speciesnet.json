@@ -1,0 +1,247 @@
+{
+ "cat.jpg": {
+  "bbox": [
+   0.05919,
+   0.18431,
+   0.67585,
+   0.84953
+  ],
+  "top5": [
+   {
+    "index": 1806,
+    "label": "domestic cat",
+    "score": 0.9972
+   },
+   {
+    "index": 1998,
+    "label": "bird",
+    "score": 0.0008
+   },
+   {
+    "index": 1128,
+    "label": "mammal",
+    "score": 0.0007
+   },
+   {
+    "index": 2246,
+    "label": "blank",
+    "score": 0.0005
+   },
+   {
+    "index": 1613,
+    "label": "felis species",
+    "score": 0.0004
+   }
+  ]
+ },
+ "coyote.jpg": {
+  "bbox": [
+   0.76256,
+   0.4916,
+   0.9318,
+   0.625
+  ],
+  "top5": [
+   {
+    "index": 2289,
+    "label": "coyote",
+    "score": 0.9918
+   },
+   {
+    "index": 2134,
+    "label": "white-tailed deer",
+    "score": 0.0035
+   },
+   {
+    "index": 1539,
+    "label": "golden jackal",
+    "score": 0.0009
+   },
+   {
+    "index": 466,
+    "label": "northern raccoon",
+    "score": 0.0007
+   },
+   {
+    "index": 1291,
+    "label": "domestic cattle",
+    "score": 0.0003
+   }
+  ]
+ },
+ "deer.jpg": {
+  "bbox": [
+   0.0006,
+   0.0384,
+   0.42395,
+   1.0
+  ],
+  "top5": [
+   {
+    "index": 2134,
+    "label": "white-tailed deer",
+    "score": 0.9976
+   },
+   {
+    "index": 1128,
+    "label": "mammal",
+    "score": 0.0006
+   },
+   {
+    "index": 466,
+    "label": "northern raccoon",
+    "score": 0.0003
+   },
+   {
+    "index": 351,
+    "label": "mule deer",
+    "score": 0.0003
+   },
+   {
+    "index": 2246,
+    "label": "blank",
+    "score": 0.0002
+   }
+  ]
+ },
+ "fox.jpg": {
+  "bbox": [
+   0.23915,
+   0.50286,
+   0.42684,
+   0.65056
+  ],
+  "top5": [
+   {
+    "index": 209,
+    "label": "red fox",
+    "score": 0.9788
+   },
+   {
+    "index": 2283,
+    "label": "grey fox",
+    "score": 0.0041
+   },
+   {
+    "index": 2289,
+    "label": "coyote",
+    "score": 0.0039
+   },
+   {
+    "index": 1963,
+    "label": "vulpes species",
+    "score": 0.0011
+   },
+   {
+    "index": 1514,
+    "label": "red deer",
+    "score": 0.001
+   }
+  ]
+ },
+ "ringtail_night.jpg": {
+  "bbox": [
+   0.80195,
+   0.32336,
+   0.90431,
+   0.46312
+  ],
+  "top5": [
+   {
+    "index": 304,
+    "label": "ringtail",
+    "score": 0.994
+   },
+   {
+    "index": 1966,
+    "label": "common genet",
+    "score": 0.0023
+   },
+   {
+    "index": 1435,
+    "label": "crab-eating raccoon",
+    "score": 0.0004
+   },
+   {
+    "index": 2183,
+    "label": "small indian civet",
+    "score": 0.0004
+   },
+   {
+    "index": 2136,
+    "label": "nilgai",
+    "score": 0.0004
+   }
+  ]
+ },
+ "ringtail_night_ir.jpg": {
+  "bbox": [
+   0.31598,
+   0.39167,
+   0.42184,
+   0.60176
+  ],
+  "top5": [
+   {
+    "index": 304,
+    "label": "ringtail",
+    "score": 0.9984
+   },
+   {
+    "index": 1086,
+    "label": "large-spotted genet",
+    "score": 0.0008
+   },
+   {
+    "index": 1966,
+    "label": "common genet",
+    "score": 0.0001
+   },
+   {
+    "index": 858,
+    "label": "cape genet",
+    "score": 0.0001
+   },
+   {
+    "index": 394,
+    "label": "banded linsang",
+    "score": 0.0001
+   }
+  ]
+ },
+ "turkey.jpg": {
+  "bbox": [
+   0.02658,
+   0.06232,
+   0.9147,
+   0.9416
+  ],
+  "top5": [
+   {
+    "index": 1448,
+    "label": "wild turkey",
+    "score": 0.7658
+   },
+   {
+    "index": 1998,
+    "label": "bird",
+    "score": 0.0662
+   },
+   {
+    "index": 1544,
+    "label": "turkey vulture",
+    "score": 0.0616
+   },
+   {
+    "index": 2262,
+    "label": "ring-necked pheasant",
+    "score": 0.0294
+   },
+   {
+    "index": 139,
+    "label": "northern flicker",
+    "score": 0.0082
+   }
+  ]
+ }
+}

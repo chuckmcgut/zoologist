@@ -1,0 +1,371 @@
+//! Turning event updates into stored events, pictures, clips and species (plan Step 7.1).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, Utc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::task::JoinSet;
+use zoologist_core::config::CameraKind;
+use zoologist_core::{BBox, Frame, Label, local_date_hour};
+use zoologist_store::{ClipState, EventPatch, NewEvent, SegmentRecord};
+use zoologist_video::clips::{SegmentFile, build_clip, write_snapshot, write_thumb};
+use zoologist_vision::events::{EventKey, EventUpdate};
+use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesJob};
+
+use crate::analysis::CameraUpdate;
+use crate::app::{ApiEvent, AppState};
+
+/// Pictures of a live event are refreshed at most this often.
+const PICTURE_INTERVAL: Duration = Duration::from_secs(2);
+/// At most this many clips are built at once.
+const CLIP_JOBS: usize = 2;
+
+/// Set when a camera's recorder has written its last segment (the source ended).
+pub type RecorderDone = HashMap<String, Arc<AtomicBool>>;
+
+/// A downloaded Hub recording that serves as the clip of every event found in it.
+#[derive(Clone, Debug)]
+pub struct HubClip {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    /// Relative to the data directory.
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// Clip files of imported Hub recordings, by camera. The importer adds one before analysing
+/// a recording; the writer links each event of that recording to it.
+#[derive(Clone, Default)]
+pub struct HubClips(Arc<std::sync::Mutex<HashMap<String, Vec<HubClip>>>>);
+
+impl HubClips {
+    pub fn add(&self, camera: &str, clip: HubClip) {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let list = map.entry(camera.to_string()).or_default();
+        // Events end at most a few seconds after their recording; older entries are done.
+        let cutoff = clip.start - chrono::Duration::hours(1);
+        list.retain(|c| c.end > cutoff);
+        list.push(clip);
+    }
+
+    /// The recording that contains `t` (with 2 s of slack either side).
+    pub fn find(&self, camera: &str, t: DateTime<Utc>) -> Option<HubClip> {
+        let slack = chrono::Duration::seconds(2);
+        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(camera)?
+            .iter()
+            .rev()
+            .find(|c| c.start - slack <= t && t <= c.end + slack)
+            .cloned()
+    }
+}
+
+struct Open {
+    id: u64,
+    label: Label,
+    started_at: DateTime<Utc>,
+    last_picture: Instant,
+    top_score: f32,
+}
+
+/// Consumes event updates until the channel closes, then waits for pending clip and species
+/// jobs. Returns when everything is written.
+pub async fn run_writer(
+    app: AppState,
+    mut updates: mpsc::Receiver<CameraUpdate>,
+    recorders: RecorderDone,
+    hub_clips: HubClips,
+) {
+    let mut open: HashMap<EventKey, Open> = HashMap::new();
+    let mut jobs = JoinSet::new();
+    let clip_slots = Arc::new(Semaphore::new(CLIP_JOBS));
+    while let Some((camera_id, update)) = updates.recv().await {
+        let result = handle(
+            &app,
+            &mut open,
+            &mut jobs,
+            &clip_slots,
+            &recorders,
+            &hub_clips,
+            &camera_id,
+            update,
+        )
+        .await;
+        if let Err(e) = result {
+            tracing::warn!(camera = %camera_id, "could not store event: {e:#}");
+        }
+    }
+    while jobs.join_next().await.is_some() {}
+}
+
+fn rel_path(kind: &str, started_at: DateTime<Utc>, app: &AppState, id: u64, ext: &str) -> String {
+    let (date, _) = local_date_hour(started_at, app.config.station.timezone);
+    format!("{kind}/{date}/{id}.{ext}")
+}
+
+/// Writes the snapshot and (when there is a box) the thumbnail of an event.
+async fn write_pictures(
+    app: &AppState,
+    id: u64,
+    started_at: DateTime<Utc>,
+    frame: Frame,
+    bbox: Option<BBox>,
+) -> (String, Option<String>) {
+    let snap = rel_path("snapshots", started_at, app, id, "jpg");
+    let thumb = bbox.map(|_| rel_path("thumbs", started_at, app, id, "jpg"));
+    let (dir, s, t) = (app.data_dir.clone(), snap.clone(), thumb.clone());
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        write_snapshot(&frame, bbox.as_ref(), &dir.join(&s))?;
+        if let (Some(t), Some(b)) = (t, bbox) {
+            write_thumb(&frame, &b, &dir.join(t))?;
+        }
+        Ok(())
+    })
+    .await;
+    if !matches!(result, Ok(Ok(()))) {
+        tracing::warn!(event = id, "could not write snapshot: {result:?}");
+    }
+    (snap, thumb)
+}
+
+async fn handle(
+    app: &AppState,
+    open: &mut HashMap<EventKey, Open>,
+    jobs: &mut JoinSet<()>,
+    clip_slots: &Arc<Semaphore>,
+    recorders: &RecorderDone,
+    hub_clips: &HubClips,
+    camera_id: &str,
+    update: EventUpdate,
+) -> anyhow::Result<()> {
+    match update {
+        EventUpdate::Started {
+            key,
+            label,
+            raw_class,
+            started_at,
+            score,
+            snapshot,
+            bbox,
+        } => {
+            let new = NewEvent {
+                camera_id: camera_id.to_string(),
+                label,
+                raw_class,
+                started_at,
+                top_score: score,
+                median_score: score,
+                best_bbox: bbox,
+                snapshot_path: None,
+                thumb_path: None,
+            };
+            let record = app.store.call(move |s| s.insert_event(&new)).await?;
+            let (snap, thumb) = write_pictures(app, record.id, started_at, snapshot, bbox).await;
+            let patch = EventPatch {
+                snapshot_path: Some(Some(snap)),
+                thumb_path: Some(thumb),
+                ..Default::default()
+            };
+            let id = record.id;
+            if let Some(record) = app.store.call(move |s| s.update_event(id, &patch)).await? {
+                tracing::info!(camera = %camera_id, event = id, label = %label, "event started");
+                app.publish(ApiEvent::Started(record));
+            }
+            open.insert(
+                key,
+                Open {
+                    id,
+                    label,
+                    started_at,
+                    last_picture: Instant::now(),
+                    top_score: score,
+                },
+            );
+        }
+        EventUpdate::Updated {
+            key,
+            top_score,
+            best,
+        } => {
+            let Some(o) = open.get_mut(&key) else {
+                return Ok(());
+            };
+            let mut patch = EventPatch::default();
+            if top_score > o.top_score {
+                o.top_score = top_score;
+                patch.top_score = Some(top_score);
+            }
+            if let Some(best) = best
+                && o.last_picture.elapsed() >= PICTURE_INTERVAL
+            {
+                o.last_picture = Instant::now();
+                write_pictures(app, o.id, o.started_at, best.frame, Some(best.bbox)).await;
+                patch.best_bbox = Some(best.bbox);
+            }
+            if patch != EventPatch::default() {
+                let id = o.id;
+                if let Some(record) = app.store.call(move |s| s.update_event(id, &patch)).await? {
+                    app.publish(ApiEvent::Updated(record));
+                }
+            }
+        }
+        EventUpdate::Ended {
+            key,
+            ended_at,
+            top_score,
+            median_score,
+            crops,
+        } => {
+            let Some(o) = open.remove(&key) else {
+                return Ok(());
+            };
+            let camera = app.config.cameras.iter().find(|c| c.id == camera_id);
+            let recording = camera.is_some_and(|c| c.kind == CameraKind::Stream && c.record);
+            // Imported Hub recordings are their own clip.
+            let hub_clip = camera
+                .filter(|c| c.kind == CameraKind::HubClips)
+                .and_then(|_| hub_clips.find(camera_id, o.started_at));
+            let mut patch = EventPatch {
+                ended_at: Some(ended_at),
+                top_score: Some(top_score.max(o.top_score)),
+                median_score: Some(median_score),
+                clip_state: (!recording).then_some(ClipState::Failed),
+                ..Default::default()
+            };
+            if let Some(clip) = hub_clip {
+                patch.clip_state = Some(ClipState::Ready);
+                patch.clip_path = Some(Some(clip.path));
+                patch.clip_bytes = Some(Some(clip.bytes));
+            }
+            let id = o.id;
+            if let Some(record) = app.store.call(move |s| s.update_event(id, &patch)).await? {
+                tracing::info!(camera = %camera_id, event = id, "event ended");
+                app.publish(ApiEvent::Ended(record));
+            }
+            if recording {
+                let rec = &app.config.recording;
+                let ms = |s: f32| chrono::Duration::milliseconds((s * 1000.0) as i64);
+                let from = o.started_at - ms(rec.pre_capture_seconds);
+                let to = ended_at + ms(rec.post_capture_seconds);
+                let done = recorders.get(camera_id).cloned().unwrap_or_default();
+                jobs.spawn(clip_job(
+                    app.clone(),
+                    clip_slots.clone(),
+                    id,
+                    camera_id.to_string(),
+                    from,
+                    to,
+                    done,
+                ));
+            }
+            if o.label == Label::Animal
+                && let Some(species) = &app.species
+                && !crops.is_empty()
+            {
+                let (tx, rx) = oneshot::channel();
+                species.submit(SpeciesJob {
+                    crops: crops
+                        .into_iter()
+                        .map(|c| SpeciesCrop {
+                            frame: c.frame,
+                            bbox: c.bbox,
+                            quality: c.quality,
+                        })
+                        .collect(),
+                    detector_score: top_score,
+                    reply: tx,
+                });
+                let app = app.clone();
+                jobs.spawn(async move {
+                    let patch = match rx.await {
+                        Ok(SpeciesAnswer::Species(guess)) => {
+                            tracing::info!(event = id, species = %guess.common_name, score = guess.score, "species");
+                            EventPatch {
+                                species: Some(guess),
+                                ..Default::default()
+                            }
+                        }
+                        // The detector called a person or a vehicle an animal.
+                        Ok(SpeciesAnswer::NotAnimal(label)) => {
+                            tracing::info!(event = id, label = %label, "not an animal: relabelled");
+                            EventPatch {
+                                label: Some(label),
+                                ..Default::default()
+                            }
+                        }
+                        _ => return,
+                    };
+                    if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
+                        app.publish(ApiEvent::Updated(record));
+                    }
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Waits until the recording covers `[from, to]` (or the camera's recorder has stopped, or a
+/// timeout passes), then cuts the clip.
+async fn clip_job(
+    app: AppState,
+    slots: Arc<Semaphore>,
+    id: u64,
+    camera: String,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    recorder_done: Arc<AtomicBool>,
+) {
+    let segment = Duration::from_secs(u64::from(app.config.recording.segment_seconds));
+    let deadline = Instant::now() + segment * 3 + Duration::from_secs(30);
+    let segments: Vec<SegmentRecord> = loop {
+        let cam = camera.clone();
+        let found = app
+            .store
+            .call(move |s| s.segments_between(&cam, from, to))
+            .await
+            .unwrap_or_default();
+        let covered = found.iter().any(|s| s.ended_at >= to);
+        if covered || recorder_done.load(Ordering::Relaxed) || Instant::now() >= deadline {
+            break found;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    let Ok(_permit) = slots.acquire().await else {
+        return;
+    };
+    let started = segments.first().map_or(from, |s| s.started_at);
+    let out_rel = rel_path("clips", from.max(started), &app, id, "mp4");
+    let files: Vec<SegmentFile> = segments
+        .iter()
+        .map(|s| SegmentFile {
+            path: s.path.clone(),
+            index_path: s.index_path.clone(),
+        })
+        .collect();
+    let (dir, out) = (app.data_dir.clone(), out_rel.clone());
+    let result =
+        tokio::task::spawn_blocking(move || build_clip(&dir, &files, from, to, &dir.join(out)))
+            .await;
+    let patch = match result {
+        Ok(Ok(clip)) => EventPatch {
+            clip_path: Some(Some(out_rel)),
+            clip_bytes: Some(Some(clip.bytes)),
+            clip_state: Some(ClipState::Ready),
+            ..Default::default()
+        },
+        other => {
+            tracing::warn!(event = id, camera = %camera, "no clip: {other:?}");
+            EventPatch {
+                clip_state: Some(ClipState::Failed),
+                ..Default::default()
+            }
+        }
+    };
+    if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
+        app.publish(ApiEvent::Updated(record));
+    }
+}

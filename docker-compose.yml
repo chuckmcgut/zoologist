@@ -1,0 +1,53 @@
+# Zoologist with Docker Compose (plan Step 11.3).
+#
+# First time:
+#   cp config/zoologist.example.toml config/zoologist.toml   # then edit cameras, station, …
+#   scripts/fetch-models.sh                                   # or copy the .onnx files into ./models
+#   docker compose up -d --build
+#   open http://<host>:8090
+#
+# The Proxmox VM needs CPU type "host" (AVX2); Zoologist refuses to start without it.
+
+services:
+  zoologist:
+    build:
+      context: .
+      target: runtime            # or runtime-ffmpeg if [video] decoder = "ffmpeg"
+      # args: { TARGET_CPU: x86-64-v3 }   # a little faster on the 5700U; the image then needs AVX2
+    image: zoologist:latest
+    restart: unless-stopped
+    init: true
+    ports: ["8090:8090"]
+    environment:
+      TZ: "America/New_York"
+      RUST_LOG: "info"
+    volumes:
+      - ./config:/config:ro
+      - ./models:/models:ro
+      - zoologist-data:/data
+      # Or a host directory, e.g. the VM's separate recordings disk. It must be writable by
+      # uid 65532:  sudo chown -R 65532:65532 /srv/zoologist/data
+      # - /srv/zoologist/data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # Optional: leave some CPU for the VM itself.
+    # cpus: "6"
+
+  # Optional restreamer for cameras that allow only one or two clients (e.g. Wyze RTSP
+  # firmware): cameras then use rtsp://mediamtx:8554/<name>.
+  # mediamtx:
+  #   image: bluenviron/mediamtx:1   # pin an exact version
+  #   restart: unless-stopped
+  #   volumes: ["./config/mediamtx.yml:/mediamtx.yml:ro"]
+
+  # Optional bridge for Wyze cameras without RTSP firmware (a separate Python container,
+  # not linked into Zoologist). Pick a maintained docker-wyze-bridge fork and pin its tag.
+  # Cameras then use rtsp://wyze-bridge:8554/<camera-name>.
+  # wyze-bridge:
+  #   image: <fork image>:<pinned tag>
+  #   restart: unless-stopped
+  #   environment: { WYZE_EMAIL: "...", WYZE_PASSWORD: "...", API_ID: "...", API_KEY: "..." }
+
+volumes:
+  zoologist-data:
