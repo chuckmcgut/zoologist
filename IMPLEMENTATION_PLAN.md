@@ -526,6 +526,8 @@ owner** with the options: fewer fps, a smaller model, or the `ort` feature (FFI)
 
 ### Step 0.4 — RTSP capture and pure-Rust H.264 decode check
 
+**Status:** done (DECISIONS #19). The decode table for the owner's cameras is in docs/PERFORMANCE.md: every stream decodes bit-exactly. `decoder_report` now also runs on `tools/fixtures/owner/` captures and Hub recordings when they are present. The ms/frame on the 5700U is measured in Step 11.4.
+
 **Objective:** Confirm retina works with the owner's cameras, and decide `video.decoder`.
 
 **Deliverables:**
@@ -549,6 +551,8 @@ owner** with the options: fewer fps, a smaller model, or the `ort` feature (FFI)
 **Acceptance:** capture files exist for every camera, the decode table is in PERFORMANCE.md, and the decision is recorded.
 
 ### Step 0.5 — Camera inventory and settings (`docs/CAMERAS.md`)
+
+**Status:** done as a **local** file: `docs/CAMERAS.md` holds addresses, names and device IDs, so it is in `.gitignore` and never published.
 
 **Objective:** Know exactly how each camera will connect before writing ingest code.
 

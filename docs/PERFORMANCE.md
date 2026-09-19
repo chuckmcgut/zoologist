@@ -43,3 +43,29 @@ Findings:
 
 SpeciesNet top-1 on the sorrel-640 animal crop: domestic cat 1.00, coyote 0.99, white-tailed deer 1.00,
 red fox 0.98, ringtail 0.99 and 1.00 (both night photos), wild turkey 0.77.
+
+## 2026-09-19: H.264 decoding on the owner's cameras (Step 0.4)
+
+30 s captured from each live stream with `zoologist capture`, plus one Hub battery-camera recording. Each input is
+decoded from the same Annex-B bytes by `rusty_h264-decoder` and by ffmpeg (the reference). Run it again with:
+
+```sh
+cargo test --release -p zoologist-video -- --ignored --nocapture decoder_report
+```
+
+Measured on the Apple M1 Max, one thread. The captures stay in `tools/fixtures/owner/`, which is not in git.
+
+| Stream | Size | fps | Bitrate | Keyframe every | Frames (rust/ffmpeg) | Errors | ms/frame | min Y-PSNR |
+|---|---|---|---|---|---|---|---|---|
+| Reolink via Home Hub RTSP, sub | 1536×432 | 20 | 0.4 Mbit/s | 4.0 s | 566/566 | 0 | 0.70 | bit-exact |
+| Hybrid thermal camera, colour main | 1280×720 | 29 | 9.7 Mbit/s | 1.7 s | 791/791 | 0 | 8.24 | bit-exact |
+| Hybrid thermal camera, thermal sub | 256×192 | 23 | 0.7 Mbit/s | 2.2 s | 673/673 | 0 | 0.45 | bit-exact |
+| Hybrid thermal camera, thermal main | 512×384 | 23 | 3.0 Mbit/s | 2.2 s | 676/676 | 0 | 1.81 | bit-exact |
+| Home Hub battery recording, sub (fragmented MP4) | 1536×432 | 15 | - | - | 135/135 | 0 | 0.95 | bit-exact |
+| Home Hub battery recording, main | 5120×1440 | - | - | - | H.265: not decoded | | | |
+
+Decoding time follows the **bitrate** more than the pixel count: the 9.7 Mbit/s colour stream costs 12× more per
+frame than the 1536×432 stream at 0.4 Mbit/s. Every frame has to be decoded (later frames depend on earlier ones),
+so that stream uses about 8 ms × 29 fps ≈ 24 % of one M1 core. The 5700U is probably about twice as slow per
+core, which is still inside the plan's budget (≤ 15 ms per frame). Capping that camera at about 4 Mbit/s would
+roughly halve the cost.

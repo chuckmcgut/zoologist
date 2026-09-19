@@ -184,3 +184,16 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   mean, and nothing was dropped.
 - **Trade-off.** Larger frames use more memory (about 1 MB per 1536×432 frame kept for snapshots and crops), and
   static objects are found more often. Motion masks or `tracking.min_event_score` handle those.
+
+## 19. 2026-09-19: `decoder = "rust"` is confirmed on the owner's cameras (Step 0.4)
+
+- **Decision.** Keep the pure-Rust decoder (`rusty_h264-decoder`) as the default. The Docker image needs no ffmpeg.
+- **Why.** Every live stream of the owner's cameras decodes **bit-exactly** against ffmpeg: 100 % of frames and
+  0 errors (docs/PERFORMANCE.md). That covers the Reolink stream through the Home Hub, and all four streams of
+  the hybrid thermal camera, from 256×192 to 1280×720. It also covers a Home Hub battery recording. The slowest
+  stream takes 8.2 ms per frame on an M1 core, which is within the plan's ≤ 15 ms per frame on the 5700U. The
+  5700U figure still has to be measured (Step 11.4).
+- **Not covered.** H.265 streams (the Hub's main recordings, the Reolink main stream) are never decoded:
+  Zoologist analyses the H.264 sub streams and keeps H.264 clips.
+- **Seen on the way.** The hybrid thermal camera sometimes starts an RTSP session in the middle of a fragmented
+  frame ("FU-A has start bit unset"). The source reconnects within seconds: about once per stream in 20 minutes.

@@ -9,3 +9,4 @@
 probe_*.jpg
 .DS_Store
 /config/zoologist.toml
+/docs/CAMERAS.md

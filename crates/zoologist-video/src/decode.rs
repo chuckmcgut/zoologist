@@ -620,63 +620,146 @@ mod tests {
         }
     }
 
-    /// The Phase 0 decoder comparison on the synthetic fixtures. Prints a table.
+    /// Decodes `items` with the pure-Rust decoder and with ffmpeg (the reference), from the same
+    /// Annex-B bytes, and prints one table row: frames, errors, ms per frame, worst Y-PSNR.
+    fn report_row(name: &str, items: &[StreamItem]) {
+        let Some(StreamItem::Info(info)) = items.first() else {
+            println!("| {name} | no stream info |");
+            return;
+        };
+        if info.codec != Codec::H264 {
+            println!("| {name} | {:?}: not H.264, skipped |||||", info.codec);
+            return;
+        }
+        let config = parse_avc_config(&info.decoder_config).unwrap();
+        // One Annex-B access unit per sample, with parameter sets before keyframes.
+        let units: Vec<Vec<u8>> = items[1..]
+            .iter()
+            .filter_map(|item| match item {
+                StreamItem::Unit(unit) => {
+                    let mut annexb = Vec::new();
+                    if unit.is_keyframe {
+                        annexb.extend(param_sets_annexb(&config));
+                    }
+                    avcc_to_annexb(&unit.avcc, 4, &mut annexb).ok()?;
+                    Some(annexb)
+                }
+                StreamItem::Info(_) => None,
+            })
+            .collect();
+
+        let mut reference_decoder =
+            FfmpegPipeDecoder::spawn(Path::new("ffmpeg"), config.width, config.height).unwrap();
+        let mut reference = reference_decoder.decode(&units.concat()).unwrap();
+        settle();
+        reference.extend(reference_decoder.finish());
+
+        let mut decoder = RustDecoder::new();
+        let (mut pictures, mut errors) = (Vec::new(), 0);
+        let start = Instant::now();
+        for unit in &units {
+            match decoder.decode(unit) {
+                Ok(p) => pictures.extend(p),
+                Err(e) => {
+                    if errors == 0 {
+                        println!("<!-- {name}: first error: {e} -->");
+                    }
+                    errors += 1;
+                }
+            }
+        }
+        let ms = start.elapsed().as_secs_f64() * 1000.0 / units.len().max(1) as f64;
+        let min_psnr = pictures
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| psnr_y(a, b))
+            .fold(f64::INFINITY, f64::min);
+        println!(
+            "| {name} | {}×{} | {}/{} | {errors} | {ms:.2} | {} |",
+            config.width,
+            config.height,
+            pictures.len(),
+            reference.len(),
+            if pictures.is_empty() {
+                "-".into()
+            } else {
+                format!("{min_psnr:.1} dB")
+            }
+        );
+    }
+
+    /// The Phase 0 decoder comparison: the synthetic fixtures, plus the owner's captures and Hub
+    /// recordings when `tools/fixtures/owner/` has them (`zoologist capture`, `zoologist
+    /// hub-test`). Prints a table.
     /// Run with `cargo test --release -p zoologist-video -- --ignored --nocapture decoder_report`.
     #[test]
     #[ignore]
     fn decoder_report() {
-        println!("\n| Fixture | Decoder | Frames | Errors | ms/frame | min Y-PSNR vs ffmpeg |");
+        println!(
+            "\n| Input | Size | Frames (rust/ffmpeg) | Errors | ms/frame (rust) | min Y-PSNR vs ffmpeg |"
+        );
         println!("|---|---|---|---|---|---|");
         for name in [
             "testsrc_main_640x360_10fps.h264",
             "testsrc_high_640x360_10fps.h264",
             "moving_square_640x360_10fps.h264",
         ] {
-            let reference = reference(name);
-            let mut decoder = RustDecoder::new();
-            let mut pictures = Vec::new();
-            let mut errors = 0;
-            let items = fixture_items(name, 10);
-            let config = match &items[0] {
-                StreamItem::Info(i) => parse_avc_config(&i.decoder_config).unwrap(),
-                _ => unreachable!(),
-            };
-            let start = Instant::now();
-            for item in &items[1..] {
-                let StreamItem::Unit(unit) = item else {
-                    continue;
-                };
-                let mut annexb = Vec::new();
-                if unit.is_keyframe {
-                    annexb.extend(param_sets_annexb(&config));
-                }
-                avcc_to_annexb(&unit.avcc, 4, &mut annexb).unwrap();
-                match decoder.decode(&annexb) {
-                    Ok(p) => pictures.extend(p),
-                    Err(e) => {
-                        if errors == 0 {
-                            println!("<!-- {name}: first error: {e} -->");
-                        }
-                        errors += 1;
-                    }
-                }
+            report_row(name, &fixture_items(name, 10));
+        }
+        let owner = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/owner");
+        let mut captures: Vec<_> = std::fs::read_dir(&owner)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".units.jsonl"))
+            .collect();
+        captures.sort();
+        for units in captures {
+            let base = units
+                .to_string_lossy()
+                .trim_end_matches(".units.jsonl")
+                .to_string();
+            let name = Path::new(&base)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            match crate::capture::read_capture(Path::new(&base)) {
+                Ok(items) => report_row(&name, &items),
+                Err(e) => println!("| {name} | cannot read: {e} |||||"),
             }
-            let ms = start.elapsed().as_secs_f64() * 1000.0 / (items.len() - 1) as f64;
-            let min_psnr = pictures
-                .iter()
-                .zip(&reference)
-                .map(|(a, b)| psnr_y(a, b))
-                .fold(f64::INFINITY, f64::min);
-            println!(
-                "| {name} | rust | {}/{} | {errors} | {ms:.2} | {} |",
-                pictures.len(),
-                reference.len(),
-                if pictures.is_empty() {
-                    "-".into()
-                } else {
-                    format!("{min_psnr:.1} dB")
+        }
+        let mut hub: Vec<_> = std::fs::read_dir(owner.join("hub"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "mp4"))
+            .collect();
+        hub.sort();
+        for path in hub {
+            let name = format!("hub/{}", path.file_name().unwrap().to_string_lossy());
+            let (info, entries) = match crate::mp4r::read_mp4_index(&path) {
+                Ok(x) => x,
+                Err(e) => {
+                    println!("| {name} | cannot read: {e} |||||");
+                    continue;
                 }
-            );
+            };
+            let samples = crate::mp4r::read_samples(&path, &entries).unwrap();
+            let start = Utc::now();
+            let items: Vec<StreamItem> = std::iter::once(StreamItem::Info(info))
+                .chain(samples.into_iter().map(|s| {
+                    StreamItem::Unit(AccessUnit {
+                        received_at: start + chrono::Duration::microseconds(s.wall_us),
+                        ts_90k: s.wall_us * 9 / 100,
+                        is_keyframe: s.is_key,
+                        avcc: s.data,
+                    })
+                }))
+                .collect();
+            report_row(&name, &items);
         }
     }
 }
