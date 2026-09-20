@@ -331,14 +331,20 @@ pub fn classify(config: &Config, images: &[std::path::PathBuf]) -> Result<()> {
                 label.scientific_name()
             );
         }
-        match model.rules.decide(&probs, 0.9) {
-            Some(g) => println!(
-                "  answer: {} ({}) {:.0} %",
-                g.common_name,
-                g.scientific_name,
-                g.score * 100.0
-            ),
-            None => println!("  answer: unidentified animal"),
+        match model.rules.not_an_animal(&probs) {
+            Some(zoologist_core::Label::Motion) => {
+                println!("  answer: nothing there (the event would become motion)")
+            }
+            Some(label) => println!("  answer: not an animal, this is a {label}"),
+            None => match model.rules.decide(&probs, 0.9) {
+                Some(g) => println!(
+                    "  answer: {} ({}) {:.0} %",
+                    g.common_name,
+                    g.scientific_name,
+                    g.score * 100.0
+                ),
+                None => println!("  answer: unidentified animal"),
+            },
         }
     }
     Ok(())

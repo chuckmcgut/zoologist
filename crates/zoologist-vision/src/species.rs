@@ -31,6 +31,8 @@ pub const INPUT_SIZE: u32 = 480;
 const CERTAIN: f32 = 0.8;
 /// Minimum detector score for the lower `min_score` threshold to apply (threshold 4b).
 const DETECTOR_AGREES: f32 = 0.2;
+/// "blank" (an empty scene) above this means the detector found something that is not there.
+const NOTHING_THERE: f32 = 0.9;
 /// Model id stored with each result.
 pub const MODEL_ID: &str = "speciesnet-4.0.3a";
 
@@ -263,22 +265,33 @@ pub enum SpeciesAnswer {
 }
 
 impl SpeciesRules {
-    /// `Some(Person)` or `Some(Vehicle)` when the top label is "human" or "vehicle" and above
-    /// SpeciesNet's certainty threshold.
+    /// What the classifier says the event is, when it is certainly **not** an animal:
+    ///
+    /// - `Person`/`Vehicle` when "human" and "vehicle" together pass [`CERTAIN`] (a person on a
+    ///   quad bike splits its probability between the two, so neither alone is enough);
+    /// - `Motion` when "blank" alone passes [`NOTHING_THERE`]: the detector found an animal in
+    ///   moving leaves, glare or rain, and the event is kept as plain motion.
+    ///
+    /// The threshold for "blank" is higher because a real animal in an unusual picture (night
+    /// infrared, thermal, heavy blur) can also score as blank.
     pub fn not_an_animal(&self, probs: &[f32]) -> Option<Label> {
-        let (i, p) = probs
-            .iter()
-            .copied()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(&b.1))?;
-        if p <= CERTAIN {
-            return None;
+        let (mut blank, mut human, mut vehicle) = (0.0, 0.0, 0.0);
+        for (i, p) in probs.iter().enumerate() {
+            match self.labels.get(i).map(|l| l.common.as_str()) {
+                Some("human") => human += p,
+                Some("vehicle") => vehicle += p,
+                Some("blank") => blank += p,
+                _ => {}
+            }
         }
-        match self.labels.get(i)?.common.as_str() {
-            "human" => Some(Label::Person),
-            "vehicle" => Some(Label::Vehicle),
-            _ => None,
+        if human + vehicle > CERTAIN {
+            return Some(if vehicle > human {
+                Label::Vehicle
+            } else {
+                Label::Person
+            });
         }
+        (blank > NOTHING_THERE).then_some(Label::Motion)
     }
 
     /// The answer for averaged probabilities `probs` (one per label) of an event whose

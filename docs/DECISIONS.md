@@ -197,3 +197,22 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   Zoologist analyses the H.264 sub streams and keeps H.264 clips.
 - **Seen on the way.** The hybrid thermal camera sometimes starts an RTSP session in the middle of a fragmented
   frame ("FU-A has start bit unset"). The source reconnects within seconds: about once per stream in 20 minutes.
+
+## 20. 2026-09-19: Parked objects end their event and start no new ones
+
+- **Decision.** `tracking.stationary_seconds` (default 60) and `stationary_forget_minutes` (default 30). An object
+  that has not moved (IoU ≥ 0.8 with where it stopped) for that long ends its event and keeps being followed
+  silently. Its place is remembered, so finding it again starts no event until it really moves.
+- **Why.** A truck parked next to a camera made 35 "vehicle" events in a day, all from the same box: the detector
+  lost it for a few seconds, the track expired, and the next detection started a new event. With the rule, that
+  camera made 0 events in the next 54 minutes. Parked objects also no longer count as "an object is active", so
+  motion elsewhere still makes motion events.
+
+## 21. 2026-09-19: SpeciesNet's non-animal classes are used together
+
+- **Decision.** An "animal" event is relabelled when the classifier is sure it is not an animal: "human" plus
+  "vehicle" above 0.8 give a person or vehicle event, and "blank" above 0.9 turns it into a motion event.
+- **Why.** Real examples from the owner's cameras: sun glare through trees scored "blank" 97.7 %, and a person on
+  a quad bike scored vehicle 71.7 % plus human 22.2 %. Neither passed the old rule (one class above 0.8), so both
+  were stored as "unidentified animal". The threshold for "blank" is higher because a real animal in night
+  infrared or heavy blur can also score as blank: a dark, blurry shape at blank 60 % stays an animal.

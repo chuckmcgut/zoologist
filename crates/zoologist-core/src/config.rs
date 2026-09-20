@@ -255,6 +255,12 @@ pub struct TrackingConfig {
     pub iou_match: f32,
     /// Median score over the track needed to become an event.
     pub min_event_score: f32,
+    /// An object that has not moved for this long is "parked": its event ends and it starts no
+    /// new events until it moves again (a parked car, a chair, a feeder). 0 turns this off.
+    pub stationary_seconds: f32,
+    /// How long a parked object is remembered after Zoologist stops seeing it, so that finding
+    /// it again does not start an event.
+    pub stationary_forget_minutes: u32,
 }
 
 impl Default for TrackingConfig {
@@ -264,6 +270,8 @@ impl Default for TrackingConfig {
             max_missed_seconds: 5.0,
             iou_match: 0.3,
             min_event_score: 0.55,
+            stationary_seconds: 60.0,
+            stationary_forget_minutes: 30,
         }
     }
 }
@@ -550,6 +558,9 @@ impl Config {
             "tracking.min_event_score",
             self.tracking.min_event_score,
         );
+        if self.tracking.stationary_seconds < 0.0 {
+            err("tracking.stationary_seconds must be 0 or more".into());
+        }
         if self.tracking.min_hits == 0 {
             err("tracking.min_hits must be at least 1".into());
         }

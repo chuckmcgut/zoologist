@@ -9,6 +9,7 @@ const LABELS: &[&str] = &[
     "u4;;;;;;blank",
     "u5;mammalia;primates;hominidae;homo;sapiens;human",
     "u6;mammalia;carnivora;canidae;vulpes;lagopus;arctic fox",
+    "u7;;;;;;vehicle",
 ];
 
 const TAXONOMY: &[&str] = &[
@@ -32,8 +33,15 @@ fn rules(geofence: &str, country: Option<&str>, admin1: Option<&str>) -> Species
     }
 }
 
-/// Probabilities for the six test labels.
+/// Probabilities for the six animal/blank/human test labels ("vehicle" gets 0).
 fn probs(p: [f32; 6]) -> Vec<f32> {
+    let mut v = p.to_vec();
+    v.push(0.0);
+    v
+}
+
+/// Probabilities including "vehicle" (the last label).
+fn probs_with_vehicle(p: [f32; 7]) -> Vec<f32> {
     p.to_vec()
 }
 
@@ -106,23 +114,42 @@ fn non_animal_top_labels_give_no_species() {
 }
 
 #[test]
-fn a_certain_human_is_a_person_not_an_animal() {
+fn confident_non_animals_are_relabelled() {
     let r = rules("{}", None, None);
+    // Labels: [0] deer, [1] roe deer, [2] fox, [3] blank, [4] human, [5] vehicle.
     assert_eq!(
         r.not_an_animal(&probs([0.02, 0.0, 0.0, 0.0, 0.98, 0.0])),
         Some(Label::Person)
     );
-    // Not certain enough, blank, or an animal: no relabelling.
+    // A person on a quad bike: human and vehicle split the probability.
     assert_eq!(
-        r.not_an_animal(&probs([0.2, 0.0, 0.0, 0.1, 0.7, 0.0])),
-        None
+        r.not_an_animal(&probs_with_vehicle([
+            0.04, 0.0, 0.02, 0.04, 0.22, 0.0, 0.68
+        ])),
+        Some(Label::Vehicle)
     );
     assert_eq!(
-        r.not_an_animal(&probs([0.02, 0.0, 0.0, 0.97, 0.01, 0.0])),
-        None
+        r.not_an_animal(&probs_with_vehicle([
+            0.04, 0.0, 0.02, 0.04, 0.68, 0.0, 0.22
+        ])),
+        Some(Label::Person)
     );
+    // Glare or moving leaves: "blank" alone.
+    assert_eq!(
+        r.not_an_animal(&probs([0.01, 0.0, 0.0, 0.97, 0.01, 0.01])),
+        Some(Label::Motion)
+    );
+    // A real animal, or anything unclear, stays an animal.
     assert_eq!(
         r.not_an_animal(&probs([0.9, 0.05, 0.02, 0.01, 0.01, 0.01])),
+        None
+    );
+    assert_eq!(
+        r.not_an_animal(&probs([0.14, 0.0, 0.1, 0.61, 0.05, 0.1])),
+        None
+    );
+    assert_eq!(
+        r.not_an_animal(&probs([0.2, 0.0, 0.0, 0.1, 0.7, 0.0])),
         None
     );
 }

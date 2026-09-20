@@ -69,6 +69,9 @@ min_hits = 3               # detections before a track becomes an event
 max_missed_seconds = 5     # track ends after this long without a match
 iou_match = 0.3
 min_event_score = 0.55     # median score over the track
+stationary_seconds = 60    # an object that stops moving for this long is "parked": its event
+                           # ends and it starts no new events until it moves again (0 = off)
+stationary_forget_minutes = 30   # how long a parked object is remembered once out of sight
 
 [recording]
 segment_seconds = 10
