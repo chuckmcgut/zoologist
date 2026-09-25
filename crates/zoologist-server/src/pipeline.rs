@@ -99,7 +99,9 @@ pub fn check_cpu(allow_slow_cpu: bool) -> Result<()> {
     Ok(())
 }
 
-fn load_detector(config: &Config) -> Result<(DetectorHandle, Vec<std::thread::JoinHandle<()>>)> {
+pub fn load_detector(
+    config: &Config,
+) -> Result<(DetectorHandle, Vec<std::thread::JoinHandle<()>>)> {
     let key = &config.inference.detector;
     let model_cfg = config
         .models

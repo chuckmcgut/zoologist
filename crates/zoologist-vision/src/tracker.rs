@@ -16,6 +16,12 @@ const CROP_SLOT_MS: i64 = 1000;
 const UPDATE_INTERVAL_MS: i64 = 1000;
 /// A box overlapping its previous position by at least this much has not moved.
 const STILL_IOU: f32 = 0.8;
+/// Movement counts once the box has stayed away from where it started for this long.
+const MOVING_FOR_MS: i64 = 600;
+/// Edges this close to the picture's border are cut off by it.
+const BORDER: f32 = 0.01;
+/// Growing or shrinking evenly: the smaller side's move is at least this share of the larger.
+const BALANCED: f32 = 0.3;
 /// A new track overlapping a remembered parked object by this much is that object again.
 const SAME_OBJECT_IOU: f32 = 0.6;
 
@@ -45,6 +51,11 @@ pub struct Track {
     /// Up to `max_crops` crops, best first, each from a different second of the track.
     pub crops: Vec<BestCrop>,
     pub confirmed: bool,
+    /// Where the object was first seen, and whether it has moved away from there since.
+    origin: BBox,
+    pub moved: bool,
+    /// Since when the box has been away from `origin` without a break (see [`has_moved`]).
+    moving_since: Option<DateTime<Utc>>,
     /// Where the object was when it last moved, and when it stopped there.
     anchor: BBox,
     still_since: DateTime<Utc>,
@@ -203,6 +214,9 @@ impl Tracker {
                 velocity: (0.0, 0.0),
                 crops: Vec::new(),
                 confirmed: false,
+                origin: det.bbox,
+                moved: false,
+                moving_since: None,
                 anchor: det.bbox,
                 still_since: now,
                 // An object found where a parked one was is that object: no new event.
@@ -287,6 +301,49 @@ impl Tracker {
     }
 }
 
+/// True when an object seen at `origin` and now at `now` has really moved, not just been boxed
+/// differently. The detector often boxes part of a parked car, or the car plus a shed, so the
+/// box jumps around while one side stays where it was. Only these count:
+/// - the whole box shifted by `min_movement` × its diagonal: along an axis, both opposite edges
+///   moved the same way (the shift is the smaller of the two);
+/// - the box grew or shrank a lot with the same shape and its left and right edges moved apart
+///   (or together) about equally: driving towards or away from the camera.
+///
+/// An edge on the picture's border says nothing: the object may go on beyond it.
+fn has_moved(origin: &BBox, now: &BBox, min_movement: f32) -> bool {
+    let on_border = |v: f32| !(BORDER..=1.0 - BORDER).contains(&v);
+    let visible = |a: f32, b: f32| !on_border(a) && !on_border(b);
+    // Shift along one axis: both edges visible and moved the same way.
+    let shift = |a1: f32, a2: f32, b1: f32, b2: f32| {
+        let (d1, d2) = (b1 - a1, b2 - a2);
+        if visible(a1, b1) && visible(a2, b2) && d1 * d2 > 0.0 {
+            d1.abs().min(d2.abs())
+        } else {
+            0.0
+        }
+    };
+    let dx = shift(origin.x1, origin.x2, now.x1, now.x2);
+    let dy = shift(origin.y1, origin.y2, now.y1, now.y2);
+    let diagonal = (origin.width().powi(2) + origin.height().powi(2)).sqrt();
+    if (dx * dx + dy * dy).sqrt() > min_movement * diagonal {
+        return true;
+    }
+
+    let area = |b: &BBox| (b.width() * b.height()).max(f32::EPSILON);
+    let aspect = |b: &BBox| b.width().max(f32::EPSILON) / b.height().max(f32::EPSILON);
+    let size_ratio = area(now) / area(origin);
+    let same_shape = (aspect(now) / aspect(origin) - 1.0).abs() <= 0.25;
+    if !same_shape || (0.55..=1.8).contains(&size_ratio) {
+        return false;
+    }
+    // Growing: the left edge moves left and the right edge right (shrinking: the reverse).
+    let (left, right) = (origin.x1 - now.x1, now.x2 - origin.x2);
+    visible(origin.x1, now.x1)
+        && visible(origin.x2, now.x2)
+        && left * right > 0.0
+        && left.abs().min(right.abs()) >= BALANCED * left.abs().max(right.abs())
+}
+
 /// Applies a matched detection to a track and returns the event it causes, if any.
 fn observe(
     track: &mut Track,
@@ -311,16 +368,23 @@ fn observe(
     // Movement: a box that still overlaps where it stopped has not moved.
     let moved = track.anchor.iou(&det.bbox) < STILL_IOU;
     if moved {
-        track.anchor = det.bbox;
-        track.still_since = now;
         if track.dormant {
-            // It drove off (or woke up): let it become an event again.
+            // Its box changed: it may be driving off, or the detector may just have boxed it
+            // differently. Either way it is a new visit that has to move away from where it
+            // parked before it becomes an event again.
             track.dormant = false;
             track.confirmed = false;
+            track.moved = false;
+            track.moving_since = None;
+            track.origin = track.anchor;
+            track.first_seen = now;
             track.hits = 0;
             track.scores.clear();
+            track.crops.clear();
             track.last_update_sent = None;
         }
+        track.anchor = det.bbox;
+        track.still_since = now;
     }
     track.bbox = det.bbox;
     track.last_detected = now;
@@ -340,10 +404,30 @@ fn observe(
         track.dormant = true;
         return Some(TrackEvent::Ended(track.clone()));
     }
+    if !track.moved {
+        track.moved = if cfg.min_movement <= 0.0 || !cfg.require_movement.contains(&track.label) {
+            true
+        } else if has_moved(&track.origin, &det.bbox, cfg.min_movement) {
+            // A redrawn box flickers back; a vehicle that drives stays away.
+            let since = *track.moving_since.get_or_insert(now);
+            now - since >= chrono::Duration::milliseconds(MOVING_FOR_MS)
+        } else {
+            track.moving_since = None;
+            false
+        };
+    }
     if !track.confirmed {
-        if track.hits >= cfg.min_hits && track.median_score() >= cfg.min_event_score {
+        if track.hits >= cfg.min_hits && track.median_score() >= cfg.min_event_score && track.moved
+        {
             track.confirmed = true;
             track.last_update_sent = Some(now);
+            tracing::debug!(
+                id = track.id,
+                label = %track.label,
+                origin = ?track.origin,
+                bbox = ?det.bbox,
+                "track confirmed"
+            );
             return Some(TrackEvent::Confirmed(track.clone()));
         }
         return None;
@@ -521,10 +605,145 @@ mod tests {
         assert!(found_from > lost_from);
     }
 
+    /// The Container camera case: a parked truck found again and again, its box jumping
+    /// between the whole truck, half of it and the truck plus a shed. It never moves, so it is
+    /// never an event.
+    #[test]
+    fn an_object_that_never_moves_is_never_an_event_whatever_its_box() {
+        let mut tr = tracker();
+        let shapes = [
+            BBox::new(0.28, 0.54, 0.46, 1.0),  // the whole truck
+            BBox::new(0.28, 0.54, 0.40, 1.0),  // its front half
+            BBox::new(0.28, 0.54, 0.44, 0.76), // its upper part
+            BBox::new(0.27, 0.50, 0.50, 1.0),  // truck and a bit of shed
+        ];
+        let frames: Vec<Vec<Detection>> = (0..200)
+            .map(|i| {
+                vec![Detection {
+                    label: Label::Vehicle,
+                    raw_class: "vehicle".into(),
+                    score: 0.9,
+                    bbox: shapes[i % shapes.len()],
+                }]
+            })
+            .collect();
+        let events = run(&mut tr, &frames);
+        assert!(confirmed(&events).is_empty(), "{events:?}");
+    }
+
+    /// The NC200 case: a truck parks, and afterwards the detector's box around it jumps now and
+    /// then. That wakes the track, but it must not start a new event unless the truck leaves.
+    #[test]
+    fn a_parked_object_whose_box_jumps_starts_no_new_event() {
+        let cfg = TrackingConfig {
+            stationary_seconds: 2.0,
+            ..TrackingConfig::default()
+        };
+        let mut tr = Tracker::new(&cfg, 3);
+        let car = |x: f32| vec![det(Label::Vehicle, x, 0.5, 0.2, 0.9)];
+        let parked = BBox::new(0.42, 0.5, 0.62, 0.7);
+        let jumps = [
+            parked,
+            BBox::new(0.42, 0.5, 0.55, 0.7),  // its front
+            BBox::new(0.40, 0.46, 0.66, 0.7), // with a bit of shed
+        ];
+        let mut frames: Vec<Vec<Detection>> = (0..5).map(|i| car(0.1 + i as f32 * 0.08)).collect();
+        frames.extend((0..20).map(|_| car(0.42)));
+        // Three minutes parked; the box jumps for a few frames every 10 s.
+        frames.extend((0..900).map(|i| {
+            let bbox = if i % 50 < 45 {
+                parked
+            } else {
+                jumps[(i / 50) % 3]
+            };
+            vec![Detection {
+                label: Label::Vehicle,
+                raw_class: "vehicle".into(),
+                score: 0.9,
+                bbox,
+            }]
+        }));
+        let leaving_from = frames.len();
+        frames.extend((1..=6).map(|i| car(0.42 + i as f32 * 0.08)));
+
+        let events = run(&mut tr, &frames);
+        let starts = confirmed(&events);
+        assert_eq!(starts.len(), 2, "arrival and departure only: {starts:?}");
+        assert!(starts[1].0 >= leaving_from, "{starts:?}");
+        assert_eq!(ended(&events).len(), 1, "{events:?}");
+    }
+
+    /// Box pairs (first box, box when it would have become an event) logged on a camera facing a
+    /// parked truck: parts of the truck, the whole truck, the truck plus a vehicle beside it.
+    /// None of them is movement. (One more, the windshield then the truck's upper two thirds,
+    /// grows evenly enough to pass; only [`MOVING_FOR_MS`] stops that one.)
+    #[test]
+    fn reboxing_a_parked_truck_is_not_movement() {
+        let pairs = [
+            ((0.411, 0.364, 0.611, 0.577), (0.388, 0.362, 0.864, 0.998)),
+            ((0.390, 0.363, 0.996, 1.0), (0.386, 0.359, 0.789, 0.835)),
+            ((0.387, 0.469, 0.577, 0.999), (0.391, 0.355, 0.623, 0.841)),
+            ((0.406, 0.372, 0.673, 0.619), (0.389, 0.335, 0.999, 0.998)),
+            ((0.387, 0.453, 0.542, 0.873), (0.387, 0.367, 0.584, 0.998)),
+            ((0.409, 0.371, 0.595, 0.633), (0.388, 0.360, 0.773, 0.994)),
+            ((0.395, 0.360, 0.591, 0.717), (0.387, 0.361, 0.853, 0.995)),
+            ((0.388, 0.358, 0.605, 0.733), (0.388, 0.357, 0.622, 0.999)),
+            ((0.750, 0.245, 1.0, 0.658), (0.686, 0.327, 0.999, 0.774)),
+        ];
+        let b = |(x1, y1, x2, y2): (f32, f32, f32, f32)| BBox::new(x1, y1, x2, y2);
+        for (origin, now) in pairs {
+            assert!(!has_moved(&b(origin), &b(now), 0.2), "{origin:?} → {now:?}");
+        }
+    }
+
+    #[test]
+    fn a_car_driving_past_is_an_event_and_a_still_animal_still_is() {
+        let mut tr = tracker();
+        let frames: Vec<Vec<Detection>> = (0..10)
+            .map(|i| {
+                vec![
+                    det(Label::Vehicle, 0.05 + i as f32 * 0.05, 0.5, 0.2, 0.9),
+                    det(Label::Animal, 0.7, 0.1, 0.1, 0.9),
+                ]
+            })
+            .collect();
+        let events = run(&mut tr, &frames);
+        let labels: Vec<Label> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                TrackEvent::Confirmed(t) => Some(t.label),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "{events:?}");
+        assert!(labels.contains(&Label::Vehicle) && labels.contains(&Label::Animal));
+    }
+
+    #[test]
+    fn driving_towards_the_camera_counts_as_moving() {
+        let mut tr = tracker();
+        // Same place, same shape, growing: a car driving straight at the camera.
+        let frames: Vec<Vec<Detection>> = (0..10)
+            .map(|i| {
+                let size = 0.1 * (1.0 + 0.15 * i as f32);
+                let c = 0.5;
+                vec![Detection {
+                    label: Label::Vehicle,
+                    raw_class: "vehicle".into(),
+                    score: 0.9,
+                    bbox: BBox::new(c - size / 2.0, c - size, c + size / 2.0, c + size),
+                }]
+            })
+            .collect();
+        let events = run(&mut tr, &frames);
+        assert_eq!(confirmed(&events).len(), 1, "{events:?}");
+    }
+
     #[test]
     fn stationary_seconds_zero_keeps_the_old_behaviour() {
         let cfg = TrackingConfig {
             stationary_seconds: 0.0,
+            min_movement: 0.0,
             ..TrackingConfig::default()
         };
         let mut tracker = Tracker::new(&cfg, 3);
@@ -655,7 +874,11 @@ mod tests {
 
     #[test]
     fn finish_ends_only_confirmed_tracks() {
-        let mut tr = tracker();
+        let cfg = TrackingConfig {
+            min_movement: 0.0,
+            ..TrackingConfig::default()
+        };
+        let mut tr = Tracker::new(&cfg, 3);
         let mut frames: Vec<Vec<Detection>> = (0..4)
             .map(|_| vec![det(Label::Person, 0.1, 0.1, 0.2, 0.9)])
             .collect();

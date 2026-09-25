@@ -216,3 +216,29 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   a quad bike scored vehicle 71.7 % plus human 22.2 %. Neither passed the old rule (one class above 0.8), so both
   were stored as "unidentified animal". The threshold for "blank" is higher because a real animal in night
   infrared or heavy blur can also score as blank: a dark, blurry shape at blank 60 % stays an animal.
+
+## 22. 2026-09-24: A vehicle is an event only once it really moves
+
+- **Decision.** `tracking.min_movement` (default 0.2) and `require_movement` (default `["vehicle"]`). A vehicle
+  track becomes an event only after its box has moved away from where it was first seen, for at least 0.6 s:
+  - either the whole box shifted by 0.2 × its diagonal (both opposite edges moved the same way);
+  - or it grew or shrank a lot with the same shape, its left and right edges moving apart (or together) about
+    equally, which is driving towards or away from the camera.
+
+  Edges on the picture's border are ignored. A parked object that wakes up has to move again in the same way.
+  Animals and people are unaffected: a deer standing still is still an event.
+- **Why.** Decision 20 was not enough. Parked vehicles close to a camera kept making events because the detector
+  boxes them differently all the time: the windshield, the whole truck, the truck plus the vehicle beside it.
+  Each new box looked like movement or like a new object. Measured with `zoologist replay` on the owner's saved
+  clips (every vehicle event in them was checked by eye):
+  - the Reolink camera, 31 clips: 41 vehicle events before, 1 after, which is the one real arrival;
+  - the thermal camera's colour stream, 10 clips of a truck parked nose-on: 30 before, 2 after. The 2 come from a
+    vehicle cut off by the picture's edge whose box jumps up and down.
+
+  Checking only the box's centre removed about a third of them. Checking its edges removed nearly all.
+- **Cost.** Motion events went up (13 → 25 on the Reolink camera): a parked vehicle no longer counts as "an object
+  is active", so sun and shadows now make motion events there. Cameras facing trees may want `motion` removed from
+  their labels.
+- **Tool.** `zoologist replay --config C --camera ID [--min-movement X] CLIPS...` runs saved clips through a
+  camera's analysis and prints the events. It reads only the clip files: it does not touch the database or run the
+  janitor.

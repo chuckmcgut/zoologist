@@ -72,6 +72,8 @@ min_event_score = 0.55     # median score over the track
 stationary_seconds = 60    # an object that stops moving for this long is "parked": its event
                            # ends and it starts no new events until it moves again (0 = off)
 stationary_forget_minutes = 30   # how long a parked object is remembered once out of sight
+min_movement = 0.2         # these labels only become events once they really move, by this
+require_movement = ["vehicle"]   # share of their box's diagonal (0 = off): parked cars never do
 
 [recording]
 segment_seconds = 10
@@ -105,7 +107,8 @@ detect_url = "http://192.168.1.20/flv?port=1935&app=bcs&stream=channel0_sub.bcs&
 record_url = "http://192.168.1.20/flv?port=1935&app=bcs&stream=channel0_main.bcs&user=USER&password=PASS"
 detect_fps = 5                   # frames above this rate are decoded but not analysed
 record = true
-labels = ["person", "vehicle", "animal", "motion"]
+labels = ["person", "vehicle", "animal", "motion"]   # drop "motion" for a view full of trees:
+                                                     # sun and shadows make motion events all day
 # motion_mask = [[0.0,0.0, 0.3,0.0, 0.3,0.08, 0.0,0.08]]   # e.g. the timestamp overlay
 
 # --- Reolink 4K/8MP wired camera over RTSP (main stream may be H.265) ---

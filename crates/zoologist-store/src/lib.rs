@@ -187,6 +187,26 @@ impl Store {
         Ok(updated)
     }
 
+    /// Deletes an event record (its files are the caller's). Returns `false` for an unknown id.
+    pub fn delete_event(&self, id: u64) -> Result<bool> {
+        let txn = self.db.begin_write()?;
+        let found = {
+            let mut events = txn.open_table(EVENTS)?;
+            let removed = events.remove(id)?.map(|v| v.value().to_vec());
+            match removed {
+                None => false,
+                Some(bytes) => {
+                    let record: EventRecord = serde_json::from_slice(&bytes)?;
+                    txn.open_table(EVENTS_BY_TIME)?
+                        .remove((micros(record.started_at), id))?;
+                    true
+                }
+            }
+        };
+        txn.commit()?;
+        Ok(found)
+    }
+
     /// One event by id.
     pub fn get_event(&self, id: u64) -> Result<Option<EventRecord>> {
         let txn = self.db.begin_read()?;

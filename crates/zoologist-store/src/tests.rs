@@ -449,3 +449,26 @@ async fn call_runs_on_a_blocking_thread() {
         .unwrap();
     assert_eq!(e.id, 1);
 }
+
+#[test]
+fn a_deleted_event_is_gone_from_lists_and_time_ranges() {
+    let (_dir, store) = open();
+    let a = store
+        .insert_event(&new_event("drive", Label::Vehicle, at(10, 0)))
+        .unwrap();
+    let b = store
+        .insert_event(&new_event("drive", Label::Person, at(11, 0)))
+        .unwrap();
+    assert!(store.delete_event(a.id).unwrap());
+    assert!(!store.delete_event(a.id).unwrap(), "already gone");
+    assert!(store.get_event(a.id).unwrap().is_none());
+    let ids: Vec<u64> = store
+        .events_between(at(0, 0), None)
+        .unwrap()
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, vec![b.id]);
+    let page = store.list_events(&EventQuery::default()).unwrap();
+    assert_eq!(page.items.len(), 1);
+}

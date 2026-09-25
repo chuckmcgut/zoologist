@@ -125,6 +125,36 @@ pub enum Command {
         #[arg(long, default_value = "admin")]
         user: String,
     },
+    /// Run saved clips through a camera's analysis and print the events each one produces, to
+    /// measure settings on real footage (e.g. with and without `--min-movement`).
+    Replay {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+        #[arg(long)]
+        camera: String,
+        /// Override `tracking.min_movement` (0 turns the rule off).
+        #[arg(long)]
+        min_movement: Option<f32>,
+        clips: Vec<PathBuf>,
+    },
+    /// Delete events of the given cameras and labels from before a date, with their clips and
+    /// pictures. Lists what it would delete unless `--yes` is given. Stop Zoologist first.
+    Prune {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+        /// Camera id (repeat for several).
+        #[arg(long = "camera", required = true)]
+        cameras: Vec<String>,
+        /// person, vehicle, animal or motion (repeat for several).
+        #[arg(long = "label", required = true)]
+        labels: Vec<String>,
+        /// Only events from before this local date (YYYY-MM-DD).
+        #[arg(long)]
+        before: chrono::NaiveDate,
+        /// Really delete (otherwise only list).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Insert fake events so the UI can be checked without cameras (plan Step 10.2).
     /// Refuses to touch a database that already has events.
     SeedDemo {

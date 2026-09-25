@@ -21,16 +21,14 @@ use zoologist_core::config::{CameraConfig, CameraKind, HubConfig, HubStream, NoD
 use zoologist_core::{Config, Frame, Label, local_date_hour};
 use zoologist_store::{ClipState, EventPatch, NewEvent, Store};
 use zoologist_video::clips::write_snapshot;
-use zoologist_video::decode::DecodeWorker;
 use zoologist_video::mp4r::{read_mp4_index, read_samples};
 use zoologist_video::reolink_hub::{HubClient, HubFile};
-use zoologist_video::stream::{AccessUnit, Codec, StreamItem};
+use zoologist_video::stream::Codec;
 use zoologist_vision::events::{EventKey, EventUpdate};
 use zoologist_vision::pool::DetectorHandle;
 
-use crate::analysis::{AnalysisOptions, CameraUpdate, spawn_analysis};
+use crate::analysis::{AnalysisOptions, CameraUpdate, analyse_recording};
 use crate::app::{ApiEvent, AppState};
-use crate::tools::decoder_choice;
 use crate::writer::{HubClip, HubClips};
 
 /// Recordings that ended less recently than this may still be written by the Hub.
@@ -403,62 +401,19 @@ impl Importer {
         info: zoologist_video::stream::StreamInfo,
         samples: Vec<zoologist_video::mp4w::Sample>,
     ) -> Result<(usize, Option<Frame>)> {
-        let (frames_tx, frames_rx) = mpsc::channel::<Frame>(4);
-        let (local_tx, mut local_rx) = mpsc::channel::<CameraUpdate>(64);
         let options = AnalysisOptions {
             background: true,
             tiles_until: Some(file.start + chrono::Duration::seconds(TILE_SECONDS)),
         };
-        let analysis = spawn_analysis(
-            cam.clone(),
-            self.config.clone(),
-            frames_rx,
-            Some(self.detector.clone()),
-            local_tx,
-            Arc::default(),
-            Arc::default(),
+        let (updates, first) = analyse_recording(
+            &self.config,
+            cam,
+            &self.detector,
+            info,
+            samples,
+            file.start,
             options,
         )?;
-
-        // Decode on this thread's helper while this thread forwards event updates, so neither
-        // side can block the other.
-        let mut worker =
-            DecodeWorker::new(cam.id.clone(), decoder_choice(&self.config), cam.detect_fps)
-                .with_max_width(self.config.video.analysis_max_width);
-        let start = file.start;
-        let feeder = std::thread::Builder::new()
-            .name(format!("hub-decode-{}", cam.id))
-            .spawn(move || {
-                let mut first = None;
-                let items =
-                    std::iter::once(StreamItem::Info(info)).chain(samples.into_iter().map(|s| {
-                        StreamItem::Unit(AccessUnit {
-                            received_at: start + chrono::Duration::microseconds(s.wall_us),
-                            ts_90k: s.wall_us * 9 / 100,
-                            is_keyframe: s.is_key,
-                            avcc: s.data,
-                        })
-                    }));
-                for item in items {
-                    for frame in worker.handle(item) {
-                        if first.is_none() {
-                            first = Some(frame.clone());
-                        }
-                        if frames_tx.blocking_send(frame).is_err() {
-                            return first;
-                        }
-                    }
-                }
-                first
-            })?;
-
-        // A recording is short: collect its events, tidy them up, then store them.
-        let mut updates = Vec::new();
-        while let Some((_, update)) = local_rx.blocking_recv() {
-            updates.push(update);
-        }
-        let first = feeder.join().ok().flatten();
-        let _ = analysis.join();
         let updates = merge_recording_events(updates, self.config.species.max_crops_per_event);
         let started = updates
             .iter()

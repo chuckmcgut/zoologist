@@ -70,6 +70,21 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Replay {
+            config,
+            camera,
+            min_movement,
+            clips,
+        } => with_config(&config, |cfg| {
+            zoologist_server::replay::replay(cfg, &camera, &clips, min_movement)
+        }),
+        Command::Prune {
+            config,
+            cameras,
+            labels,
+            before,
+            yes,
+        } => with_config(&config, |cfg| prune(&cfg, cameras, &labels, before, yes)),
         Command::Healthcheck { url } => healthcheck::run(&url),
         Command::Janitor { config, dry_run } => with_config(&config, |cfg| janitor(&cfg, dry_run)),
         Command::SeedDemo { config, fixtures } => {
@@ -136,6 +151,36 @@ where
             ExitCode::FAILURE
         }
     }
+}
+
+fn prune(
+    config: &Config,
+    cameras: Vec<String>,
+    labels: &[String],
+    before: chrono::NaiveDate,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let labels = labels
+        .iter()
+        .map(|l| l.parse().map_err(|e| anyhow::anyhow!("label {l:?}: {e}")))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let filter = zoologist_server::prune::PruneFilter {
+        cameras,
+        labels,
+        before,
+    };
+    let report = zoologist_server::prune::prune(config, &filter, yes)?;
+    let verb = if yes { "deleted" } else { "would delete" };
+    println!(
+        "{verb} {} events and {} files ({:.1} GB)",
+        report.events,
+        report.files,
+        report.bytes as f64 / 1e9
+    );
+    if !yes {
+        println!("run again with --yes to delete them");
+    }
+    Ok(())
 }
 
 fn janitor(config: &Config, dry_run: bool) -> anyhow::Result<()> {

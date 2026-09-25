@@ -13,5 +13,7 @@ pub mod hub_test;
 pub mod janitor;
 pub mod live;
 pub mod pipeline;
+pub mod prune;
+pub mod replay;
 pub mod tools;
 pub mod writer;

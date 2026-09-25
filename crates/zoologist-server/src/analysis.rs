@@ -149,3 +149,72 @@ pub fn spawn_analysis(
             send(ups);
         })
 }
+
+/// Runs a recorded clip through the same decoder and analysis as a live camera, with frames
+/// timed from `start`. Returns every event update (in order) and the first decoded frame. Used
+/// by the Hub importer and by `zoologist replay`.
+pub fn analyse_recording(
+    config: &Arc<Config>,
+    camera: &CameraConfig,
+    detector: &DetectorHandle,
+    info: zoologist_video::stream::StreamInfo,
+    samples: Vec<zoologist_video::mp4w::Sample>,
+    start: chrono::DateTime<chrono::Utc>,
+    options: AnalysisOptions,
+) -> std::io::Result<(Vec<EventUpdate>, Option<Frame>)> {
+    use zoologist_video::decode::DecodeWorker;
+    use zoologist_video::stream::{AccessUnit, StreamItem};
+
+    let (frames_tx, frames_rx) = mpsc::channel::<Frame>(4);
+    let (local_tx, mut local_rx) = mpsc::channel::<CameraUpdate>(64);
+    let analysis = spawn_analysis(
+        camera.clone(),
+        config.clone(),
+        frames_rx,
+        Some(detector.clone()),
+        local_tx,
+        Arc::default(),
+        Arc::default(),
+        options,
+    )?;
+    // Decode on a helper thread while this one collects event updates, so neither side can
+    // block the other.
+    let mut worker = DecodeWorker::new(
+        camera.id.clone(),
+        crate::tools::decoder_choice(config),
+        camera.detect_fps,
+    )
+    .with_max_width(config.video.analysis_max_width);
+    let feeder = std::thread::Builder::new()
+        .name(format!("replay-decode-{}", camera.id))
+        .spawn(move || {
+            let mut first = None;
+            let items =
+                std::iter::once(StreamItem::Info(info)).chain(samples.into_iter().map(|s| {
+                    StreamItem::Unit(AccessUnit {
+                        received_at: start + chrono::Duration::microseconds(s.wall_us),
+                        ts_90k: s.wall_us * 9 / 100,
+                        is_keyframe: s.is_key,
+                        avcc: s.data,
+                    })
+                }));
+            for item in items {
+                for frame in worker.handle(item) {
+                    if first.is_none() {
+                        first = Some(frame.clone());
+                    }
+                    if frames_tx.blocking_send(frame).is_err() {
+                        return first;
+                    }
+                }
+            }
+            first
+        })?;
+    let mut updates = Vec::new();
+    while let Some((_, update)) = local_rx.blocking_recv() {
+        updates.push(update);
+    }
+    let first = feeder.join().ok().flatten();
+    let _ = analysis.join();
+    Ok((updates, first))
+}

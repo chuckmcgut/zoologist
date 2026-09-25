@@ -261,6 +261,14 @@ pub struct TrackingConfig {
     /// How long a parked object is remembered after Zoologist stops seeing it, so that finding
     /// it again does not start an event.
     pub stationary_forget_minutes: u32,
+    /// Objects of the labels in `require_movement` must move before they become an event: the
+    /// centre must travel this fraction of the box's diagonal (or the box must clearly grow or
+    /// shrink, keeping its shape). Parked cars that the detector finds again and again never
+    /// move. 0 = off.
+    pub min_movement: f32,
+    /// Labels that must move to become an event. Vehicles by default: an animal may be first
+    /// seen standing still, and it should still be reported.
+    pub require_movement: Vec<Label>,
 }
 
 impl Default for TrackingConfig {
@@ -272,6 +280,8 @@ impl Default for TrackingConfig {
             min_event_score: 0.55,
             stationary_seconds: 60.0,
             stationary_forget_minutes: 30,
+            min_movement: 0.2,
+            require_movement: vec![Label::Vehicle],
         }
     }
 }
@@ -558,6 +568,9 @@ impl Config {
             "tracking.min_event_score",
             self.tracking.min_event_score,
         );
+        if !(0.0..=2.0).contains(&self.tracking.min_movement) {
+            err("tracking.min_movement must be 0..=2".into());
+        }
         if self.tracking.stationary_seconds < 0.0 {
             err("tracking.stationary_seconds must be 0 or more".into());
         }
