@@ -14,7 +14,7 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 
 ## Header and filters
 
-- ✅ The header shows the station name from the config, and the tab title is "‹station› · Zoologist".
+- ☐ The header and the tab title both read "Zoologist".
 - ✅ The status line reads "Watching N cameras · M events today · detector X ms".
 - ⬜ The status turns amber when one camera is down, and red when all are down or the server is unreachable.
 - ⬜ The status says "detector falling behind" (amber) when detector drops increase between two polls.
@@ -47,6 +47,8 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 
 - ✅ Clicking a tile opens the viewer, showing the title, then camera · start · duration · score, then the scientific name and top-3 species.
 - ✅ The clip autoplays (muted, inline) with controls, and the snapshot is shown below it.
+- ✅ The viewer and the live view use the whole window: full width, with the video short enough that the title
+  and controls stay in view (checked at 1024×768, 1600×640 and 375×812).
 - ⬜ A pending clip shows the snapshot and "Clip is being prepared…", polls every 3 s, and plays once it is ready.
 - ✅ A failed or purged clip shows "Clip not available."
 - ✅ Esc and × close the viewer and pause the video.

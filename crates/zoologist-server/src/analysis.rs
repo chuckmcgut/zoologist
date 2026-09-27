@@ -52,7 +52,11 @@ pub fn spawn_analysis(
             );
             let mut motion: Option<MotionDetector> = None;
             let mut tracker = Tracker::new(&config.tracking, config.species.max_crops_per_event);
-            let mut events = EventManager::new(camera.id.clone(), &camera.labels, &config.motion);
+            let max_event = chrono::Duration::milliseconds(
+                (config.recording.max_event_minutes * 60_000.0) as i64,
+            );
+            let mut events = EventManager::new(camera.id.clone(), &camera.labels, &config.motion)
+                .with_max_event_length(Some(max_event));
             let wants_objects = camera.labels.iter().any(|l| *l != Label::Motion);
             let send = |ups: Vec<EventUpdate>| {
                 ups.into_iter()

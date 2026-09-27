@@ -907,8 +907,6 @@ async function init() {
   try {
     const cfg = await api("config");
     state.tz = cfg.station.timezone;
-    $("#station").textContent = cfg.station.name;
-    document.title = `${cfg.station.name} · Zoologist`;
   } catch (e) {
     console.warn("config unavailable", e);
   }

@@ -38,7 +38,7 @@ use zoologist_vision::species::{SpeciesHandle, SpeciesModel, spawn_species_pool}
 use crate::analysis::{AnalysisOptions, spawn_analysis};
 use crate::app::{AppState, CameraRuntime};
 use crate::hub_import::{HubRuntime, Importer};
-use crate::live::tee;
+use crate::live::{split, tee};
 use crate::tools::decoder_choice;
 use crate::writer::{HubClips, RecorderDone, run_writer};
 
@@ -196,11 +196,20 @@ impl Pipeline {
             if camera.kind == CameraKind::HubClips {
                 continue; // imported by the Hub's importer thread
             }
+            // Detect and record from the same URL: open it once and split it.
+            let shared = camera.record
+                && camera.detect_url.is_some()
+                && camera.detect_url == camera.record_url;
+            let record_status = SharedStatus::default();
             let runtime = CameraRuntime {
                 id: camera.id.clone(),
                 name: camera.name.clone(),
-                detect: SharedStatus::default(),
-                record: SharedStatus::default(),
+                detect: if shared {
+                    record_status.clone()
+                } else {
+                    SharedStatus::default()
+                },
+                record: record_status,
                 decode: Arc::default(),
                 analysis: Arc::default(),
                 latest: Arc::default(),
@@ -239,11 +248,13 @@ impl Pipeline {
                 background.push(tee(tee_rx, units_tx, runtime.live.clone()));
                 tee_tx
             };
-            sources.extend(start_source(
-                StreamRole::Detect,
-                detect_tx,
-                runtime.detect.clone(),
-            ));
+            if !shared {
+                sources.extend(start_source(
+                    StreamRole::Detect,
+                    detect_tx.clone(),
+                    runtime.detect.clone(),
+                ));
+            }
             spawn_decode_worker(
                 camera.id.clone(),
                 decoder_choice(&config),
@@ -276,7 +287,17 @@ impl Pipeline {
                 let (units_tx, units_rx) = mpsc::channel(UNIT_QUEUE);
                 let (written_tx, mut written_rx) = mpsc::channel(16);
                 let (tee_tx, tee_rx) = mpsc::channel(UNIT_QUEUE);
-                background.push(tee(tee_rx, units_tx, runtime.live.clone()));
+                background.push(if shared {
+                    split(
+                        tee_rx,
+                        units_tx,
+                        detect_tx.clone(),
+                        runtime.live.clone(),
+                        opts.fast_files,
+                    )
+                } else {
+                    tee(tee_rx, units_tx, runtime.live.clone())
+                });
                 sources.extend(start_source(
                     StreamRole::Record,
                     tee_tx,
@@ -312,7 +333,8 @@ impl Pipeline {
                     done.store(true, Ordering::Relaxed);
                 }));
             }
-            tracing::info!(camera = %camera.id, record = camera.record, "camera started");
+            drop(detect_tx);
+            tracing::info!(camera = %camera.id, record = camera.record, shared, "camera started");
             cameras.push(runtime);
         }
         let hub_cameras = config

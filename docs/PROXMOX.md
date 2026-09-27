@@ -61,13 +61,18 @@ In `docker-compose.yml`, swap the `zoologist-data` volume for the data disk:
 Then:
 
 ```bash
+docker compose pull                 # ghcr.io/chuckmcgut/zoologist:latest (linux/amd64)
 docker compose run --rm zoologist check-config --config /config/zoologist.toml
-docker compose up -d --build
+docker compose up -d
 docker compose ps                   # "healthy" after about a minute
 docker compose logs -f zoologist
 ```
 
 The dashboard is on `http://<vm-address>:8090`.
+
+The image is built and pushed by GitHub Actions on every push to `main` (`.github/workflows/image.yml`). If the
+package is private, log in once with a GitHub token that has `read:packages`:
+`docker login ghcr.io -u <github-user>`. To update: `docker compose pull && docker compose up -d`.
 
 ## Useful commands
 

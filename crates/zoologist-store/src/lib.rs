@@ -29,6 +29,8 @@ pub use records::{
 const SCHEMA_VERSION: u64 = 1;
 
 const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
+/// Memory redb may use for its page cache.
+const DB_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const EVENTS: TableDefinition<u64, &[u8]> = TableDefinition::new("events");
 const EVENTS_BY_TIME: TableDefinition<(i64, u64), ()> = TableDefinition::new("events_by_time");
 const SEGMENTS: TableDefinition<(&str, i64), &[u8]> = TableDefinition::new("segments");
@@ -89,7 +91,10 @@ impl Store {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| StoreError::Db(redb::Error::Io(e)))?;
         }
-        let db = Database::create(path)?;
+        // redb caches up to 1 GiB by default; the database is a few MB, so this is plenty.
+        let db = Database::builder()
+            .set_cache_size(DB_CACHE_BYTES)
+            .create(path)?;
         let txn = db.begin_write()?;
         {
             let mut meta = txn.open_table(META)?;

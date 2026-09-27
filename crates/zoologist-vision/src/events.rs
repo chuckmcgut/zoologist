@@ -68,6 +68,7 @@ impl EventUpdate {
 
 struct MotionEvent {
     id: u64,
+    started_at: DateTime<Utc>,
     last_motion: DateTime<Utc>,
 }
 
@@ -77,8 +78,11 @@ pub struct EventManager {
     labels: Vec<Label>,
     min_motion: chrono::Duration,
     cooldown: chrono::Duration,
-    /// Track ids that were reported as Started (labels not in `labels` are never reported).
-    started_tracks: std::collections::HashSet<u64>,
+    /// Track ids that were reported as Started (labels not in `labels` are never reported),
+    /// with when their current event started.
+    started_tracks: std::collections::HashMap<u64, DateTime<Utc>>,
+    /// Longer events are ended and continued as new ones (`None`: no limit).
+    max_event: Option<chrono::Duration>,
     /// Start of the current run of continuous motion without objects.
     motion_since: Option<DateTime<Utc>>,
     last_motion_seen: Option<DateTime<Utc>>,
@@ -99,6 +103,7 @@ impl EventManager {
             min_motion: ms(motion.motion_event_min_seconds),
             cooldown: ms(motion.motion_event_cooldown_seconds),
             started_tracks: Default::default(),
+            max_event: None,
             motion_since: None,
             last_motion_seen: None,
             best_motion_frame: None,
@@ -106,6 +111,17 @@ impl EventManager {
             cooldown_until: None,
             next_motion_id: 1,
         }
+    }
+
+    /// Ends events after `max` and continues them as new events, so that no clip gets longer
+    /// than that (clips are cut in memory-sized pieces and long clips are hard to watch).
+    pub fn with_max_event_length(mut self, max: Option<chrono::Duration>) -> Self {
+        self.max_event = max.filter(|m| *m > chrono::Duration::zero());
+        self
+    }
+
+    fn too_long(&self, started_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        self.max_event.is_some_and(|max| now - started_at >= max)
     }
 
     fn key(&self, source: EventSource) -> EventKey {
@@ -125,7 +141,7 @@ impl EventManager {
                         continue;
                     }
                     let Some(best) = track.best() else { continue };
-                    self.started_tracks.insert(track.id);
+                    self.started_tracks.insert(track.id, track.first_seen);
                     out.push(EventUpdate::Started {
                         key: self.key(EventSource::Track(track.id)),
                         label: track.label,
@@ -137,7 +153,33 @@ impl EventManager {
                     });
                 }
                 TrackEvent::Updated(track) => {
-                    if self.started_tracks.contains(&track.id) {
+                    let Some(&started_at) = self.started_tracks.get(&track.id) else {
+                        continue;
+                    };
+                    let now = track.last_detected;
+                    if self.too_long(started_at, now)
+                        && let Some(best) = track.best()
+                    {
+                        // End this part and go on with a new event from here.
+                        let key = self.key(EventSource::Track(track.id));
+                        out.push(EventUpdate::Ended {
+                            key: key.clone(),
+                            ended_at: now,
+                            top_score: track.top_score(),
+                            median_score: track.median_score(),
+                            crops: track.crops.clone(),
+                        });
+                        out.push(EventUpdate::Started {
+                            key,
+                            label: track.label,
+                            raw_class: Some(track.raw_class.clone()),
+                            started_at: now,
+                            score: track.top_score(),
+                            snapshot: best.frame.clone(),
+                            bbox: Some(track.bbox),
+                        });
+                        self.started_tracks.insert(track.id, now);
+                    } else {
                         out.push(EventUpdate::Updated {
                             key: self.key(EventSource::Track(track.id)),
                             top_score: track.top_score(),
@@ -146,7 +188,7 @@ impl EventManager {
                     }
                 }
                 TrackEvent::Ended(track) => {
-                    if self.started_tracks.remove(&track.id) {
+                    if self.started_tracks.remove(&track.id).is_some() {
                         out.push(EventUpdate::Ended {
                             key: self.key(EventSource::Track(track.id)),
                             ended_at: track.last_detected,
@@ -207,6 +249,33 @@ impl EventManager {
 
             if let Some(active) = &mut self.active_motion {
                 active.last_motion = now;
+                let (id, started_at) = (active.id, active.started_at);
+                if self.too_long(started_at, now) {
+                    // End this part and go on with a new motion event, without a cooldown.
+                    out.push(EventUpdate::Ended {
+                        key: self.key(EventSource::Motion(id)),
+                        ended_at: now,
+                        top_score: 0.0,
+                        median_score: 0.0,
+                        crops: Vec::new(),
+                    });
+                    let id = self.next_motion_id;
+                    self.next_motion_id += 1;
+                    self.active_motion = Some(MotionEvent {
+                        id,
+                        started_at: now,
+                        last_motion: now,
+                    });
+                    out.push(EventUpdate::Started {
+                        key: self.key(EventSource::Motion(id)),
+                        label: Label::Motion,
+                        raw_class: None,
+                        started_at: now,
+                        score: 0.0,
+                        snapshot: frame.clone(),
+                        bbox: Some(union),
+                    });
+                }
             } else if now - since >= self.min_motion
                 && self.cooldown_until.is_none_or(|until| now >= until)
                 && let Some((_, snapshot, bbox)) = self.best_motion_frame.clone()
@@ -215,6 +284,7 @@ impl EventManager {
                 self.next_motion_id += 1;
                 self.active_motion = Some(MotionEvent {
                     id,
+                    started_at: since,
                     last_motion: now,
                 });
                 out.push(EventUpdate::Started {
@@ -364,6 +434,63 @@ mod tests {
         // Started once motion lasted 3 s; ended 5 s after it stopped.
         assert_eq!(sim.log[0].0, 3000);
         assert!(sim.log[1].0 >= 49 * 200 + 5000);
+    }
+
+    /// A person working in view for 25 s with a 10 s limit: three events back to back.
+    #[test]
+    fn a_long_visit_is_split_into_events_of_at_most_the_limit() {
+        let mut sim = Sim::new();
+        sim.events = EventManager::new("cam".into(), &Label::ALL, &MotionConfig::default())
+            .with_max_event_length(Some(chrono::Duration::seconds(10)));
+        for i in 0..125 {
+            let x = 0.05 + i as f32 * 0.005; // walking slowly across
+            sim.step(i * 200, &[b(x)], &[person(x)]);
+        }
+        for i in 125..170 {
+            sim.step(i * 200, &[], &[]);
+        }
+        assert_eq!(
+            sim.names(),
+            vec![
+                "start person",
+                "end track",
+                "start person",
+                "end track",
+                "start person",
+                "end track"
+            ]
+        );
+        // Each part ends and the next starts on the same frame.
+        assert_eq!(sim.log[1].0, sim.log[2].0);
+        assert_eq!(sim.log[3].0, sim.log[4].0);
+        assert!(sim.log[2].0 - sim.log[0].0 <= 10_200, "{:?}", sim.log);
+    }
+
+    #[test]
+    fn long_motion_is_split_without_a_cooldown_gap() {
+        let mut sim = Sim::new();
+        sim.events = EventManager::new("cam".into(), &Label::ALL, &MotionConfig::default())
+            .with_max_event_length(Some(chrono::Duration::seconds(10)));
+        for i in 0..110 {
+            sim.step(i * 200, &[b(0.7)], &[]); // 22 s of swaying branches
+        }
+        for i in 110..150 {
+            sim.step(i * 200, &[], &[]);
+        }
+        assert_eq!(
+            sim.names(),
+            vec![
+                "start motion",
+                "end motion",
+                "start motion",
+                "end motion",
+                "start motion",
+                "end motion"
+            ]
+        );
+        // The first event started after 3 s of motion but counts from when motion began (0 s).
+        assert_eq!((sim.log[0].0, sim.log[1].0), (3000, 10_000));
+        assert_eq!(sim.log[2].0, 10_000);
     }
 
     #[test]

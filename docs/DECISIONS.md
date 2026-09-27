@@ -242,3 +242,50 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
 - **Tool.** `zoologist replay --config C --camera ID [--min-movement X] CLIPS...` runs saved clips through a
   camera's analysis and prints the events. It reads only the clip files: it does not touch the database or run the
   janitor.
+
+## 23. 2026-09-26: A stream used for detection and recording is opened once
+
+- **Decision.** When a camera's `detect_url` and `record_url` are the same, Zoologist opens one connection and
+  splits it. The recorder gets every frame. The analysis must never hold up the recording, so when it falls
+  behind it skips frames up to the next keyframe, where a decoder can pick up again.
+- **Why.** Two of the owner's cameras detect and record from the same stream (a Reolink sub stream at 1536×432,
+  the hybrid camera's 1280×720 colour stream). Each was sent twice: double the network traffic and double the work
+  for the camera. Some cameras also allow only a few clients.
+
+## 24. 2026-09-26: Memory stays flat: clips are copied frame by frame, events are capped
+
+- **Decision.**
+  - Clips are written straight from the recording files, one frame at a time. The file's index is built from
+    the segment indexes (sizes and times only), so a clip costs a few MB of memory however long it is.
+  - `recording.max_event_minutes` (default 5) ends a longer event and continues it as a new one, so no clip is
+    longer than that.
+  - The Docker image sets `MALLOC_ARENA_MAX=2`.
+  - redb's page cache is capped at 64 MB (its default is 1 GiB).
+- **Why.** On the Proxmox VM the container grew to 6 GB and the VM had to be rebooted. The container used
+  957 MB of its own memory 20 minutes after starting, and 1.7 GB after 25. The hybrid camera's colour stream was
+  making motion events from wind in the trees, 41 in 4 hours, many 5–16 minutes long, with clips of 100–350 MB.
+  Each clip was read into memory in full to be written. glibc keeps a memory pool per thread and rarely returns
+  freed memory to the system, so with a dozen threads every large clip raised the container's memory for good.
+- **Also.** That camera no longer makes motion events (its labels in the owner's config), like the Reolink
+  camera before it.
+
+## 25. 2026-09-26: A patched copy of the H.264 decoder, and the system allocator
+
+- **Decision.**
+  - `rusty_h264-decoder` 0.16.0 is used from `vendor/rusty_h264-decoder`, through `[patch.crates-io]`. It
+    has a one-line fix for a memory leak (see `vendor/rusty_h264-decoder/PATCHED.md`). Remove the copy once
+    upstream releases a fix.
+  - The decoder's default `global-alloc` feature is turned off. That feature makes its `rusty_alloc` the
+    allocator of the whole program. The program uses the system allocator now; the decoder's SIMD kernels
+    (`asm`) stay on.
+- **Why.**
+  - The VM's container grew by about 110 MB a minute, to 4.6 GB of its own memory in 30 minutes. Only the
+    hybrid camera's colour stream leaked: 1280×720, High profile, CABAC. Container and thermal stayed flat.
+  - macOS's allocation logging traced it to one place: 851,179 live allocations after 100 s, all from
+    `decode_slice_cabac_inner`. That path took a new box for every P macroblock without residual, which is
+    most of a still scene. A later flush then parked each box in a reuse pool that this path never drew
+    from, so the pool grew forever.
+  - With the fix, memory stays flat on the same stream.
+  - The decoder's own allocator took memory in 128 MB blocks and hid which code was allocating. Glibc's
+    allocator also makes `MALLOC_ARENA_MAX` (decision 24) take effect.
+

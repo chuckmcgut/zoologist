@@ -30,6 +30,9 @@ COPY --from=build /zoologist /usr/local/bin/zoologist
 COPY static /app/static
 COPY --from=build --chown=65532:65532 /data-empty /data
 WORKDIR /app
+# glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads
+# (decoders, detector workers, recorder) that looks like a leak. Two pools are plenty here.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/zoologist"]
 CMD ["run", "--config", "/config/zoologist.toml"]
@@ -44,6 +47,9 @@ COPY static /app/static
 COPY --from=build --chown=65532:65532 /data-empty /data
 WORKDIR /app
 USER 65532
+# glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads
+# (decoders, detector workers, recorder) that looks like a leak. Two pools are plenty here.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/zoologist"]
 CMD ["run", "--config", "/config/zoologist.toml"]

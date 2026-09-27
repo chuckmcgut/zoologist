@@ -197,9 +197,10 @@ td .when { display: block; color: var(--muted); font-size: 0.8rem; }
 .live[data-state="offline"] { color: var(--warn); }
 
 /* Viewer */
-dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--text); padding: 20px; width: min(960px, calc(100vw - 32px)); }
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--text); padding: 16px; width: calc(100vw - 32px); max-width: none; max-height: calc(100dvh - 32px); box-sizing: border-box; }
 dialog::backdrop { background: rgb(0 0 0 / 0.55); }
-dialog video, dialog img { width: 100%; height: auto; border-radius: 8px; margin: 10px 0 0; display: block; background: #000; }
+/* As large as the window allows: full width, and short enough that the title and controls stay in view. */
+dialog video, dialog img { width: 100%; height: auto; max-height: calc(100dvh - 190px); object-fit: contain; border-radius: 8px; margin: 10px 0 0; display: block; background: #000; }
 dialog p { margin: 4px 0 0; }
 .note { padding: 10px 12px; border-radius: 8px; background: var(--grid); color: var(--muted); margin-top: 10px !important; }
 .viewer-close { float: right; }
@@ -225,4 +226,4 @@ dialog p { margin: 4px 0 0; }
 .live-dot { color: var(--live); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.04em; }
 .live-dot::before { content: "● "; animation: pulse 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .live-dot::before { animation: none; } }
-#live-video { width: 100%; height: auto; border-radius: 8px; margin-top: 10px; background: #000; display: block; }
+#live-video { width: 100%; height: auto; max-height: calc(100dvh - 150px); object-fit: contain; border-radius: 8px; margin-top: 10px; background: #000; display: block; }

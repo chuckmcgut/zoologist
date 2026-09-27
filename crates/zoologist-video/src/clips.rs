@@ -3,14 +3,14 @@
 //! A clip is cut from the recording segments around an event and re-muxed into a new MP4:
 //! no decoding and no re-encoding, so it takes milliseconds.
 
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use zoologist_core::yuv::{PixelRect, RgbCropper, i420_to_rgb_full};
 use zoologist_core::{BBox, Frame};
 
-use crate::mp4r::read_samples;
-use crate::mp4w::{SampleIndexEntry, write_mp4};
+use crate::mp4w::{SampleIndexEntry, write_mp4_streamed};
 use crate::recorder::read_segment_index;
 use crate::snapshot::{encode_jpeg, write_atomic};
 
@@ -99,43 +99,45 @@ pub fn build_clip(
         return Err(no_footage());
     }
 
-    // Read the bytes segment by segment.
-    let mut samples = Vec::with_capacity(end - start + 1);
-    let mut i = start;
-    while i <= end {
-        let segment = picked[i].0;
-        let run_end = (i..=end)
-            .take_while(|&j| picked[j].0 == segment)
-            .last()
-            .unwrap_or(i);
-        let entries: Vec<SampleIndexEntry> =
-            picked[i..=run_end].iter().map(|(_, e)| e.clone()).collect();
-        samples.extend(read_samples(
-            &data_dir.join(&segments[segment].path),
-            &entries,
-        )?);
-        i = run_end + 1;
-    }
-
+    // The clip's layout comes from the segment indexes; the bytes are copied one frame at a
+    // time, so memory use does not depend on the clip's length.
+    let chosen = &picked[start..=end];
+    let layout: Vec<SampleIndexEntry> = chosen.iter().map(|(_, e)| e.clone()).collect();
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = out.with_extension("mp4.tmp");
-    write_mp4(
+    write_mp4_streamed(
         std::io::BufWriter::new(std::fs::File::create(&tmp)?),
         &info,
-        &samples,
+        &layout,
+        |w| {
+            let mut buf = Vec::new();
+            let mut file: Option<(usize, std::fs::File)> = None;
+            for (segment, e) in chosen {
+                if file.as_ref().is_none_or(|(open, _)| open != segment) {
+                    let path = data_dir.join(&segments[*segment].path);
+                    file = Some((*segment, std::fs::File::open(path)?));
+                }
+                let (_, f) = file.as_mut().expect("opened above");
+                f.seek(SeekFrom::Start(e.offset))?;
+                buf.resize(e.size as usize, 0);
+                f.read_exact(&mut buf)?;
+                w.write_all(&buf)?;
+            }
+            Ok(())
+        },
     )?;
     std::fs::rename(&tmp, out)?;
-    let first = samples.first().map_or(0, |s| s.wall_us);
-    let last = samples
+    let first = layout.first().map_or(0, |s| s.wall_us);
+    let last = layout
         .last()
         .map_or(0, |s| s.wall_us + i64::from(s.duration_90k) * 100 / 9);
     Ok(ClipInfo {
         bytes: std::fs::metadata(out)?.len(),
         started_at: DateTime::from_timestamp_micros(first).unwrap_or_default(),
         duration_ms: (last - first) / 1000,
-        frames: samples.len(),
+        frames: layout.len(),
     })
 }
 
@@ -238,6 +240,25 @@ mod tests {
             "{}",
             clip.duration_ms
         );
+        // Copying frame by frame gives exactly the file that writing them from memory gives.
+        let mut samples = Vec::new();
+        for segment in &segments {
+            let index = read_segment_index(&dir.path().join(&segment.index_path)).unwrap();
+            samples.extend(
+                crate::mp4r::read_samples(&dir.path().join(&segment.path), &index.samples).unwrap(),
+            );
+        }
+        let first = samples
+            .iter()
+            .position(|s| s.wall_us == clip.started_at.timestamp_micros())
+            .unwrap();
+        let info = read_segment_index(&dir.path().join(&segments[0].index_path))
+            .unwrap()
+            .info()
+            .unwrap();
+        let mut in_memory = Vec::new();
+        crate::mp4w::write_mp4(&mut in_memory, &info, &samples[first..first + 103]).unwrap();
+        assert!(std::fs::read(&out).unwrap() == in_memory, "same bytes");
         // For checking playback in a browser by hand.
         if let Ok(keep) = std::env::var("ZOOLOGIST_KEEP_CLIP") {
             std::fs::copy(&out, keep).unwrap();

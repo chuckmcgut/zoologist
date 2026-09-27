@@ -18,7 +18,7 @@ still to do. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the plan
 ```bash
 cp config/zoologist.example.toml config/zoologist.toml   # edit station and cameras
 scripts/fetch-models.sh                                   # exports the models (Python), see docs/MODELS.md
-docker compose up -d --build                              # dashboard on http://localhost:8090
+docker compose pull && docker compose up -d              # dashboard on http://localhost:8090
 ```
 
 On Proxmox, see [`docs/PROXMOX.md`](docs/PROXMOX.md) (the VM's CPU type must be `host`). The HTTP API is described in

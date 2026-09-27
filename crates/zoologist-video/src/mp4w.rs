@@ -39,17 +39,42 @@ pub struct SampleIndexEntry {
 /// Writes `samples` as a faststart MP4 to `out`. The first sample must be a keyframe.
 /// Returns where each sample was written.
 pub fn write_mp4<W: Write>(
-    mut out: W,
+    out: W,
     info: &StreamInfo,
     samples: &[Sample],
 ) -> io::Result<Vec<SampleIndexEntry>> {
-    if samples.first().is_none_or(|s| !s.is_key) {
+    let layout: Vec<SampleIndexEntry> = samples
+        .iter()
+        .map(|s| SampleIndexEntry {
+            offset: 0,
+            size: s.data.len() as u32,
+            duration_90k: s.duration_90k,
+            is_key: s.is_key,
+            wall_us: s.wall_us,
+        })
+        .collect();
+    write_mp4_streamed(out, info, &layout, |out| {
+        samples.iter().try_for_each(|s| out.write_all(&s.data))
+    })
+}
+
+/// Writes a faststart MP4 whose samples are described by `layout` (sizes, durations,
+/// keyframes; the offsets are ignored). `write_data` must then write exactly those samples'
+/// bytes, in order. The samples never have to be in memory together, so a long clip costs no
+/// more memory than a short one. Returns where each sample was written.
+pub fn write_mp4_streamed<W: Write>(
+    mut out: W,
+    info: &StreamInfo,
+    layout: &[SampleIndexEntry],
+    write_data: impl FnOnce(&mut CountingWriter<&mut W>) -> io::Result<()>,
+) -> io::Result<Vec<SampleIndexEntry>> {
+    if layout.first().is_none_or(|s| !s.is_key) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "an MP4 must start with a keyframe",
         ));
     }
-    let data_len: u64 = samples.iter().map(|s| s.data.len() as u64).sum();
+    let data_len: u64 = layout.iter().map(|s| u64::from(s.size)).sum();
     let ftyp = ftyp(info.codec);
     // The mdat header is 16 bytes when the payload needs a 64-bit size.
     let mdat_header: u64 = if data_len + 8 > u32::MAX as u64 {
@@ -60,9 +85,9 @@ pub fn write_mp4<W: Write>(
 
     // Build moov once to learn its size (co64 entries have a fixed size), then again with the
     // real sample offsets.
-    let placeholder = moov(info, samples, 0)?;
+    let placeholder = moov(info, layout, 0)?;
     let first_offset = ftyp.len() as u64 + placeholder.len() as u64 + mdat_header;
-    let moov = moov(info, samples, first_offset)?;
+    let moov = moov(info, layout, first_offset)?;
     debug_assert_eq!(moov.len(), placeholder.len());
 
     out.write_all(&ftyp)?;
@@ -75,21 +100,51 @@ pub fn write_mp4<W: Write>(
         out.write_all(&((data_len + 8) as u32).to_be_bytes())?;
         out.write_all(b"mdat")?;
     }
-    let mut index = Vec::with_capacity(samples.len());
-    let mut offset = first_offset;
-    for s in samples {
-        out.write_all(&s.data)?;
-        index.push(SampleIndexEntry {
-            offset,
-            size: s.data.len() as u32,
-            duration_90k: s.duration_90k,
-            is_key: s.is_key,
-            wall_us: s.wall_us,
-        });
-        offset += s.data.len() as u64;
+    let mut counting = CountingWriter {
+        inner: &mut out,
+        written: 0,
+    };
+    write_data(&mut counting)?;
+    if counting.written != data_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "wrote {} bytes of samples, the layout says {data_len}",
+                counting.written
+            ),
+        ));
     }
     out.flush()?;
-    Ok(index)
+    let mut offset = first_offset;
+    Ok(layout
+        .iter()
+        .map(|s| {
+            let entry = SampleIndexEntry {
+                offset,
+                ..s.clone()
+            };
+            offset += u64::from(s.size);
+            entry
+        })
+        .collect())
+}
+
+/// A writer that counts the bytes written through it.
+pub struct CountingWriter<W> {
+    inner: W,
+    written: u64,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// A box: 32-bit size, four-character type, payload.
@@ -133,7 +188,7 @@ fn push_matrix(p: &mut Vec<u8>) {
     }
 }
 
-fn moov(info: &StreamInfo, samples: &[Sample], first_offset: u64) -> io::Result<Vec<u8>> {
+fn moov(info: &StreamInfo, samples: &[SampleIndexEntry], first_offset: u64) -> io::Result<Vec<u8>> {
     let duration: u64 = samples.iter().map(|s| u64::from(s.duration_90k)).sum();
     let duration32 = duration.min(u32::MAX as u64) as u32;
 
@@ -260,7 +315,7 @@ pub fn codec_string(info: &StreamInfo) -> Option<String> {
     }
 }
 
-fn stbl(info: &StreamInfo, samples: &[Sample], first_offset: u64) -> io::Result<Vec<u8>> {
+fn stbl(info: &StreamInfo, samples: &[SampleIndexEntry], first_offset: u64) -> io::Result<Vec<u8>> {
     // stsd: one visual sample entry with the decoder configuration.
     let (entry_type, config_type): (&[u8; 4], &[u8; 4]) = match info.codec {
         Codec::H264 => (b"avc1", b"avcC"),
@@ -328,9 +383,9 @@ fn stbl(info: &StreamInfo, samples: &[Sample], first_offset: u64) -> io::Result<
     let mut co64 = (samples.len() as u32).to_be_bytes().to_vec();
     let mut offset = first_offset;
     for s in samples {
-        stsz.extend_from_slice(&(s.data.len() as u32).to_be_bytes());
+        stsz.extend_from_slice(&s.size.to_be_bytes());
         co64.extend_from_slice(&offset.to_be_bytes());
-        offset += s.data.len() as u64;
+        offset += u64::from(s.size);
     }
 
     Ok(bx(

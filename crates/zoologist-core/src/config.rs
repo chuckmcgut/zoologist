@@ -293,6 +293,9 @@ pub struct RecordingConfig {
     pub keep_segments_hours: u32,
     pub pre_capture_seconds: f32,
     pub post_capture_seconds: f32,
+    /// An event longer than this is ended and, if it goes on, continued as a new event, so no
+    /// clip is longer than this (0 = no limit).
+    pub max_event_minutes: f32,
 }
 
 impl Default for RecordingConfig {
@@ -302,6 +305,7 @@ impl Default for RecordingConfig {
             keep_segments_hours: 6,
             pre_capture_seconds: 5.0,
             post_capture_seconds: 5.0,
+            max_event_minutes: 5.0,
         }
     }
 }
@@ -581,6 +585,19 @@ impl Config {
             err(format!(
                 "recording.segment_seconds must be at least 2, got {}",
                 self.recording.segment_seconds
+            ));
+        }
+        let max_event = self.recording.max_event_minutes;
+        if max_event < 0.0 {
+            err("recording.max_event_minutes must be 0 (no limit) or more".into());
+        } else if max_event > 0.0 && max_event < 0.5 {
+            err(format!(
+                "recording.max_event_minutes must be at least 0.5, got {max_event}"
+            ));
+        } else if max_event * 60.0 >= self.recording.keep_segments_hours as f32 * 3600.0 {
+            err(format!(
+                "recording.max_event_minutes ({max_event}) must be shorter than \
+                 keep_segments_hours, or the start of a long event is gone before its clip is cut"
             ));
         }
 

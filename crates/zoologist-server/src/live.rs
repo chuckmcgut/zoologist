@@ -109,6 +109,59 @@ pub fn tee(
     })
 }
 
+/// One stream used for both recording and analysis (a camera whose detect and record URLs are
+/// the same): forwards `input` to the recorder and to the analysis, showing it to `feed` on the
+/// way, so the camera sends it once.
+///
+/// The recorder gets every item and may slow the source down. The analysis must not: when its
+/// queue is full, units are skipped up to the next keyframe (a decoder can only restart there).
+/// With `lossless`, the analysis gets every unit too (offline tests of `file://` sources).
+pub fn split(
+    mut input: mpsc::Receiver<StreamItem>,
+    recorder: mpsc::Sender<StreamItem>,
+    analysis: mpsc::Sender<StreamItem>,
+    feed: Arc<LiveFeed>,
+    lossless: bool,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut resync = false;
+        let mut skipped: u64 = 0;
+        while let Some(item) = input.recv().await {
+            feed.push(&item);
+            match &item {
+                StreamItem::Info(_) => {
+                    if analysis.send(item.clone()).await.is_err() {
+                        return;
+                    }
+                }
+                StreamItem::Unit(unit) if resync && !unit.is_keyframe => skipped += 1,
+                StreamItem::Unit(_) if lossless => {
+                    if analysis.send(item.clone()).await.is_err() {
+                        return;
+                    }
+                }
+                StreamItem::Unit(_) => match analysis.try_send(item.clone()) {
+                    Ok(()) => resync = false,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        if !resync {
+                            tracing::debug!("analysis behind: skipping to the next keyframe");
+                        }
+                        resync = true;
+                        skipped += 1;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => return,
+                },
+            }
+            if recorder.send(item).await.is_err() {
+                return;
+            }
+        }
+        if skipped > 0 {
+            tracing::debug!(skipped, "units not analysed on a shared stream");
+        }
+    })
+}
+
 /// Turns access units into MP4 fragments on a gap-free timeline.
 ///
 /// Many cameras stamp frames when they send them, not when they captured them, so their
@@ -227,6 +280,65 @@ mod tests {
             height: 360,
             decoder_config: Bytes::from_static(&[1, 0x64, 0, 0x1f, 0xff, 0xe0, 0]),
         }
+    }
+
+    /// The recorder gets every unit even when the analysis is stuck; the analysis then skips
+    /// to the next keyframe.
+    #[tokio::test]
+    async fn a_shared_stream_records_everything_and_analysis_resyncs_on_a_keyframe() {
+        let (in_tx, in_rx) = mpsc::channel(64);
+        let (rec_tx, mut rec_rx) = mpsc::channel(64);
+        let (ana_tx, mut ana_rx) = mpsc::channel(2);
+        let task = split(in_rx, rec_tx, ana_tx, Arc::new(LiveFeed::default()), false);
+        in_tx.send(StreamItem::Info(info())).await.unwrap();
+        // Keyframe at 0 and 5; the analysis reads nothing until all ten are in.
+        for i in 0..10 {
+            in_tx.send(unit(i * 3600, i % 5 == 0)).await.unwrap();
+        }
+        drop(in_tx);
+        let mut recorded = 0;
+        while rec_rx.recv().await.is_some() {
+            recorded += 1;
+        }
+        task.await.unwrap();
+        assert_eq!(recorded, 11, "info plus every unit");
+        let mut analysed = Vec::new();
+        while let Some(item) = ana_rx.recv().await {
+            analysed.push(item);
+        }
+        // The queue holds 2: the info and the first keyframe. Everything after was skipped,
+        // including keyframe 5 (the queue was still full).
+        assert!(matches!(analysed[0], StreamItem::Info(_)));
+        assert!(matches!(&analysed[1], StreamItem::Unit(u) if u.is_keyframe && u.ts_90k == 0));
+        assert_eq!(analysed.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn after_skipping_the_analysis_restarts_on_a_keyframe_not_before() {
+        let (in_tx, in_rx) = mpsc::channel(64);
+        let (rec_tx, mut rec_rx) = mpsc::channel(64);
+        let (ana_tx, mut ana_rx) = mpsc::channel(1);
+        let task = split(in_rx, rec_tx, ana_tx, Arc::new(LiveFeed::default()), false);
+        let recv_unit = |item: Option<StreamItem>| match item {
+            Some(StreamItem::Unit(u)) => (u.ts_90k, u.is_keyframe),
+            other => panic!("{other:?}"),
+        };
+        in_tx.send(unit(0, true)).await.unwrap();
+        in_tx.send(unit(1, false)).await.unwrap(); // queue full: skipped
+        for _ in 0..2 {
+            rec_rx.recv().await.unwrap();
+        }
+        assert_eq!(recv_unit(ana_rx.recv().await), (0, true));
+        in_tx.send(unit(2, false)).await.unwrap(); // room now, but not a keyframe
+        in_tx.send(unit(3, true)).await.unwrap();
+        in_tx.send(unit(4, false)).await.unwrap(); // full again (3 not read yet)
+        for _ in 0..3 {
+            rec_rx.recv().await.unwrap();
+        }
+        assert_eq!(recv_unit(ana_rx.recv().await), (3, true));
+        drop(in_tx);
+        task.await.unwrap();
+        assert!(ana_rx.recv().await.is_none());
     }
 
     fn unit(ts: i64, key: bool) -> StreamItem {

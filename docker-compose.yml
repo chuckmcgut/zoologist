@@ -3,23 +3,26 @@
 # First time:
 #   cp config/zoologist.example.toml config/zoologist.toml   # then edit cameras, station, …
 #   scripts/fetch-models.sh                                   # or copy the .onnx files into ./models
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d
 #   open http://<host>:8090
+#
+# The image is built by GitHub Actions (.github/workflows/image.yml) for linux/amd64. To build it
+# yourself instead, uncomment `build:` below and run `docker compose up -d --build`.
 #
 # The Proxmox VM needs CPU type "host" (AVX2); Zoologist refuses to start without it.
 
 services:
   zoologist:
-    build:
-      context: .
-      target: runtime            # or runtime-ffmpeg if [video] decoder = "ffmpeg"
-      # args: { TARGET_CPU: x86-64-v3 }   # a little faster on the 5700U; the image then needs AVX2
-    image: zoologist:latest
+    image: ghcr.io/chuckmcgut/zoologist:latest   # or a fixed version, e.g. :sha-5c3df7e
+    # build:
+    #   context: .
+    #   target: runtime            # or runtime-ffmpeg if [video] decoder = "ffmpeg"
+    #   args: { TARGET_CPU: x86-64-v3 }   # a little faster on the 5700U; the image then needs AVX2
     restart: unless-stopped
     init: true
     ports: ["8090:8090"]
     environment:
-      TZ: "America/New_York"
+      TZ: "America/Chicago"      # log times only; events use [station] timezone
       RUST_LOG: "info"
     volumes:
       - ./config:/config:ro
