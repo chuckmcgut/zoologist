@@ -83,6 +83,8 @@ pub struct AppState {
     /// Key of the detector model in `[models.*]`.
     pub detector_id: String,
     pub species: Option<SpeciesHandle>,
+    /// Why the species classifier is not running although it is enabled (shown on the dashboard).
+    pub species_problem: Option<String>,
     pub events: broadcast::Sender<ApiEvent>,
     pub cameras: Vec<CameraRuntime>,
     /// Reolink Hub importers.
@@ -104,6 +106,7 @@ impl AppState {
             store,
             detector: None,
             species: None,
+            species_problem: None,
             events,
             cameras: Vec::new(),
             hubs: Vec::new(),

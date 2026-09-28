@@ -18,6 +18,8 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 - ✅ The status line reads "Watching N cameras · M events today · detector X ms".
 - ⬜ The status turns amber when one camera is down, and red when all are down or the server is unreachable.
 - ⬜ The status says "detector falling behind" (amber) when detector drops increase between two polls.
+- ✅ The status says "species model not loaded: animals are not named" (amber) when the species model failed to
+  load, and hovering it shows why.
 - ✅ The filter bar stays at the top while scrolling.
 - ✅ The camera select lists "All cameras" plus every enabled camera. Choosing one filters all charts and events.
 - ☐ The window buttons (1h 6h 24h 7d 30d) switch Activity and Animals. 24h is selected at first.

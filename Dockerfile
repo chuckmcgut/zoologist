@@ -27,9 +27,11 @@ RUN mkdir -p /data-empty
 # Default: distroless, no shell, no ffmpeg. Runs as uid 65532.
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=build /zoologist /usr/local/bin/zoologist
-COPY static /app/static
+COPY static /static
 COPY --from=build --chown=65532:65532 /data-empty /data
-WORKDIR /app
+# Run from / so that relative paths in a config written for a checkout (models/…, data, static)
+# land on the mounts: /models, /data, and the page files at /static.
+WORKDIR /
 # glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads
 # (decoders, detector workers, recorder) that looks like a leak. Two pools are plenty here.
 ENV MALLOC_ARENA_MAX=2
@@ -43,9 +45,11 @@ FROM debian:bookworm-slim AS runtime-ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /zoologist /usr/local/bin/zoologist
-COPY static /app/static
+COPY static /static
 COPY --from=build --chown=65532:65532 /data-empty /data
-WORKDIR /app
+# Run from / so that relative paths in a config written for a checkout (models/…, data, static)
+# land on the mounts: /models, /data, and the page files at /static.
+WORKDIR /
 USER 65532
 # glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads
 # (decoders, detector workers, recorder) that looks like a leak. Two pools are plenty here.

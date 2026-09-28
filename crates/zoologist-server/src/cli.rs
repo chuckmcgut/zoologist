@@ -155,6 +155,25 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Name the animals of stored events again from their clips (e.g. events stored while the
+    /// species model was missing). Prints the answers; stores them with `--yes`. Stop Zoologist
+    /// first.
+    Reclassify {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+        /// Only this camera (repeat for several; default: all).
+        #[arg(long = "camera")]
+        cameras: Vec<String>,
+        /// Only events from this local date on (YYYY-MM-DD).
+        #[arg(long)]
+        since: Option<chrono::NaiveDate>,
+        /// Also events that already have a species.
+        #[arg(long)]
+        all: bool,
+        /// Store the answers (otherwise only print them).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Insert fake events so the UI can be checked without cameras (plan Step 10.2).
     /// Refuses to touch a database that already has events.
     SeedDemo {

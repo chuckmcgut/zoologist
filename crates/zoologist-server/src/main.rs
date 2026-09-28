@@ -85,6 +85,20 @@ fn main() -> ExitCode {
             before,
             yes,
         } => with_config(&config, |cfg| prune(&cfg, cameras, &labels, before, yes)),
+        Command::Reclassify {
+            config,
+            cameras,
+            since,
+            all,
+            yes,
+        } => with_config(&config, |cfg| {
+            let filter = zoologist_server::reclassify::ReclassifyFilter {
+                cameras,
+                since,
+                all,
+            };
+            zoologist_server::reclassify::reclassify(cfg, &filter, yes)
+        }),
         Command::Healthcheck { url } => healthcheck::run(&url),
         Command::Janitor { config, dry_run } => with_config(&config, |cfg| janitor(&cfg, dry_run)),
         Command::SeedDemo { config, fixtures } => {

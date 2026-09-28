@@ -4,7 +4,7 @@
 //! want "Annex-B" framing (each NAL unit prefixed with a `00 00 00 01` start code).
 
 use h264_reader::avcc::AvcDecoderConfigurationRecord;
-use h264_reader::nal::sps::SeqParameterSet;
+use h264_reader::nal::sps::{SeqParameterSet, SpsError};
 use h264_reader::nal::{Nal, RefNal};
 
 /// Errors reading H.264 data.
@@ -30,6 +30,33 @@ pub struct AvcConfig {
 }
 
 /// Parses an avcC record and the first SPS inside it.
+/// Parses an SPS NAL unit (with its header byte).
+///
+/// Some cameras declare a level too low for their picture size. The hybrid thermal camera's
+/// 256×192 stream says level 1.1 with constraint_set3, which means level 1b in the Main profile:
+/// at most 99 macroblocks, and the picture has 192. Decoders do not care; h264-reader rejects it.
+/// Only the picture size is needed here, so such an SPS is parsed again with its level cleared
+/// (level_idc 0: no limit applied), and the declared level is kept in the result.
+fn parse_sps(nal: &[u8]) -> Result<SeqParameterSet, SpsError> {
+    let parse =
+        |bytes: &[u8]| SeqParameterSet::from_bits(RefNal::new(bytes, &[], true).rbsp_bits());
+    match parse(nal) {
+        Err(SpsError::FieldValueTooLarge {
+            name: "pic_size_in_map_units",
+            ..
+        }) if nal.len() > 3 => {
+            // NAL header, profile_idc, constraint flags, level_idc: no emulation prevention
+            // can occur in these first bytes.
+            let mut relaxed = nal.to_vec();
+            relaxed[3] = 0;
+            let mut sps = parse(&relaxed)?;
+            sps.level_idc = nal[3];
+            Ok(sps)
+        }
+        other => other,
+    }
+}
+
 pub fn parse_avc_config(avcc: &[u8]) -> Result<AvcConfig, H264Error> {
     let record = AvcDecoderConfigurationRecord::try_from(avcc)
         .map_err(|e| H264Error::Config(format!("{e:?}")))?;
@@ -46,8 +73,7 @@ pub fn parse_avc_config(avcc: &[u8]) -> Result<AvcConfig, H264Error> {
     let first = sps
         .first()
         .ok_or_else(|| H264Error::Config("no SPS in avcC".into()))?;
-    let parsed = SeqParameterSet::from_bits(RefNal::new(first, &[], true).rbsp_bits())
-        .map_err(|e| H264Error::Config(format!("SPS: {e:?}")))?;
+    let parsed = parse_sps(first).map_err(|e| H264Error::Config(format!("SPS: {e:?}")))?;
     let (width, height) = parsed
         .pixel_dimensions()
         .map_err(|e| H264Error::Config(format!("SPS dimensions: {e:?}")))?;
@@ -180,6 +206,27 @@ pub(crate) mod tests {
     pub(crate) fn fixture(name: &str) -> Vec<u8> {
         let path = format!("{}/../../tools/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    }
+
+    /// The hybrid thermal camera's 256×192 stream: Main profile, level_idc 11 with
+    /// constraint_set3 (= level 1b, at most 99 macroblocks for a 192-macroblock picture).
+    #[test]
+    fn a_level_too_low_for_the_picture_is_accepted() {
+        let hex = "014d500bffe1002a674d500b8d8d4080cff80b7010101400000fa00001d4c3a18047c007a12ef2e\
+                   343008f800f425de5c28001000468ee3880";
+        let avcc: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        // avcC header (8 bytes), then the 0x2a-byte SPS.
+        let sps = &avcc[8..8 + 0x2a];
+        assert!(
+            SeqParameterSet::from_bits(RefNal::new(sps, &[], true).rbsp_bits()).is_err(),
+            "h264-reader alone rejects it"
+        );
+        let config = parse_avc_config(&avcc).unwrap();
+        assert_eq!((config.width, config.height), (256, 192));
+        assert_eq!(config.level_idc, 11, "the declared level is kept");
     }
 
     fn fixture_config(name: &str) -> AvcConfig {

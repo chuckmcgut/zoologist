@@ -114,6 +114,7 @@ pub async fn health(State(app): State<AppState>) -> Json<serde_json::Value> {
             "queue_depth": s.queue_depth(),
             "dropped": s.dropped(),
         })),
+        "species_problem": app.species_problem,
         "disk": {
             "recordings_mb": disk.recordings_bytes / MB,
             "clips_mb": disk.clips_bytes / MB,

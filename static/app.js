@@ -178,7 +178,12 @@ async function loadHealth() {
       parts.push("CPU without AVX2 (slow)");
       if (level === "ok") level = "warn";
     }
+    if (h.species_problem) {
+      parts.push("species model not loaded: animals are not named");
+      if (level === "ok") level = "warn";
+    }
     status.textContent = parts.join(" · ");
+    status.title = h.species_problem || "";
     status.dataset.state = level;
     renderCameraStates();
   } catch (e) {

@@ -121,19 +121,20 @@ pub fn load_detector(
     )?)
 }
 
-/// Loads the species classifier, or returns `None` (with a warning) when it is disabled or its
-/// files are missing: events are then stored without species.
-fn load_species(config: &Config) -> Option<SpeciesHandle> {
+/// Loads the species classifier. `Ok(None)` when it is disabled; `Err` says why it could not be
+/// loaded (also logged). Either way events are then stored without species.
+pub fn load_species(config: &Config) -> Result<Option<SpeciesHandle>, String> {
     let cfg = &config.species;
     if !cfg.enabled {
-        return None;
+        return Ok(None);
     }
     if !cfg.path.exists() || !cfg.labels.exists() {
-        tracing::warn!(
-            "species model {} not found: animals will not be named (run scripts/fetch-models.sh)",
+        let problem = format!(
+            "species model {} not found (run scripts/fetch-models.sh)",
             cfg.path.display()
         );
-        return None;
+        tracing::warn!("{problem}: animals will not be named");
+        return Err(problem);
     }
     match SpeciesModel::load(cfg, &config.station) {
         Ok(model) => {
@@ -143,16 +144,16 @@ fn load_species(config: &Config) -> Option<SpeciesHandle> {
             );
             match spawn_species_pool(Arc::new(model), cfg.workers, SPECIES_QUEUE) {
                 // The workers stop when the last handle is dropped.
-                Ok((handle, _threads)) => Some(handle),
+                Ok((handle, _threads)) => Ok(Some(handle)),
                 Err(e) => {
                     tracing::warn!("cannot start species workers: {e}");
-                    None
+                    Err(format!("cannot start species workers: {e}"))
                 }
             }
         }
         Err(e) => {
             tracing::warn!("cannot load species model: {e}");
-            None
+            Err(format!("cannot load species model: {e}"))
         }
     }
 }
@@ -179,6 +180,10 @@ impl Pipeline {
         let species = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || load_species(&config)).await?
+        };
+        let (species, species_problem) = match species {
+            Ok(handle) => (handle, None),
+            Err(problem) => (None, Some(problem)),
         };
 
         let cancel = CancellationToken::new();
@@ -362,6 +367,7 @@ impl Pipeline {
             detector: Some(detector.clone()),
             detector_id: config.inference.detector.clone(),
             species,
+            species_problem,
             events,
             cameras,
             hubs: hubs.clone(),

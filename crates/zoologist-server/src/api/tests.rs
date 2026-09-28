@@ -104,6 +104,20 @@ async fn health_and_cameras() {
 }
 
 #[tokio::test]
+async fn health_says_why_species_are_not_named() {
+    let mut f = fixture();
+    let (_, body) = get(&f.app, "/api/v1/health").await;
+    assert!(body["species_problem"].is_null());
+    f.app.species_problem = Some("cannot load species model: models/x.txt: not found".into());
+    let (_, body) = get(&f.app, "/api/v1/health").await;
+    assert_eq!(
+        body["species_problem"],
+        "cannot load species model: models/x.txt: not found"
+    );
+    assert!(body["species"].is_null());
+}
+
+#[tokio::test]
 async fn latest_frame_of_unknown_camera_is_404() {
     let f = fixture();
     let (status, body) = get(&f.app, "/api/v1/cameras/nope/latest.jpg").await;
