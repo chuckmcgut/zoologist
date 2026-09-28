@@ -95,6 +95,18 @@ select, input[type="date"] {
 .button:hover:not(:disabled) { border-color: var(--accent); }
 .button:disabled { opacity: 0.4; cursor: default; }
 
+/* Viewer: marking an event wrong, naming it again */
+.viewer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.feedback-note { color: var(--bad); margin: 0; flex-basis: 100%; }
+.wrong-form { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.wrong-form fieldset { border: 0; margin: 0; padding: 0; }
+.wrong-form legend { font-weight: 600; margin-bottom: 8px; }
+.wrong-form .chips label { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+.wrong-form .chips label:has(input:checked) { border-color: var(--accent); }
+.wrong-field { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 0.9rem; }
+.wrong-field input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, transparent); color: var(--text); }
+.wrong-buttons { display: flex; gap: 8px; margin-top: 12px; }
+
 .chart { min-height: 120px; }
 .empty, .chart .empty { color: var(--muted); padding: 24px 0; text-align: center; margin: 0; }
 .error { color: var(--bad); }
@@ -155,6 +167,7 @@ select, input[type="date"] {
 .badge.person { background: var(--person); }
 .badge.vehicle { background: var(--vehicle); color: #1d2521; }
 .badge.animal { background: var(--animal); }
+.badge.wrong-badge { top: auto; bottom: 6px; background: var(--bad); }
 .badge.live-badge { left: auto; right: 6px; background: var(--live); color: #fff; animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .badge.live-badge, .tile.new { animation: none; } }

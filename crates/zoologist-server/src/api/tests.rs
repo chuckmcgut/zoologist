@@ -352,6 +352,139 @@ async fn the_window_limits_the_event_list() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+async fn send(
+    app: &AppState,
+    method: &str,
+    uri: &str,
+    content_type: &str,
+    body: &str,
+) -> (StatusCode, serde_json::Value) {
+    let res = router(app.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn an_event_can_be_marked_wrong_and_the_mark_taken_back() {
+    let f = fixture();
+    let e = f
+        .app
+        .store
+        .insert_event(&new_event(Label::Animal, 5))
+        .unwrap();
+    let other = f
+        .app
+        .store
+        .insert_event(&new_event(Label::Animal, 6))
+        .unwrap();
+    let uri = format!("/api/v1/events/{}/feedback", e.id);
+    let json = "application/json";
+
+    let (status, body) = send(
+        &f.app,
+        "POST",
+        &uri,
+        json,
+        r#"{"actual":"nothing","note":" dark stump "}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["feedback"]["actual"].is_null(),
+        "nothing there: {body}"
+    );
+    assert_eq!(body["feedback"]["note"], "dark stump");
+    assert_eq!(body["label"], "animal", "the event itself is unchanged");
+
+    let (_, wrong) = get(&f.app, "/api/v1/events?wrong=true").await;
+    let ids: Vec<u64> = wrong["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![e.id], "only the marked one, not {}", other.id);
+
+    let (status, body) = send(
+        &f.app,
+        "POST",
+        &uri,
+        json,
+        r#"{"actual":"animal","species":"American crow"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["feedback"]["actual"], "animal");
+    assert_eq!(body["feedback"]["species"], "American crow");
+
+    let (status, _) = send(&f.app, "POST", &uri, json, r#"{"actual":"dragon"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A form another web page could post without asking: refused.
+    let (status, _) = send(
+        &f.app,
+        "POST",
+        &uri,
+        "text/plain",
+        r#"{"actual":"nothing"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let (status, body) = send(&f.app, "DELETE", &uri, json, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("feedback").is_none_or(|v| v.is_null()), "{body}");
+    let (_, wrong) = get(&f.app, "/api/v1/events?wrong=true").await;
+    assert!(wrong["items"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reclassify_needs_an_animal_with_a_clip_and_the_models() {
+    let f = fixture();
+    let person = f
+        .app
+        .store
+        .insert_event(&new_event(Label::Person, 5))
+        .unwrap();
+    let json = "application/json";
+    let (status, _) = send(
+        &f.app,
+        "POST",
+        &format!("/api/v1/events/{}/reclassify", person.id),
+        json,
+        "{}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "not an animal");
+    let fox = insert_fox(&f.app);
+    let (status, body) = send(
+        &f.app,
+        "POST",
+        &format!("/api/v1/events/{fox}/reclassify"),
+        json,
+        r#"{"store":true}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no models in this test: {body}"
+    );
+}
+
 /// Reads SSE frames from a response body until `n` data frames arrived.
 async fn read_sse(body: Body, n: usize) -> Vec<(String, String, serde_json::Value)> {
     let mut stream = body.into_data_stream();

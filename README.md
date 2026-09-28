@@ -169,12 +169,17 @@ it:
 | `detect`, `classify` | run the detector or the species classifier on photos |
 | `bench` | measure how fast the detector is on this machine |
 | `replay --camera ID CLIPS…` | run saved clips through a camera's analysis, to try settings on real footage |
-| `reclassify` | name the animals of stored events again from their clips (prints; `--yes` stores) |
+| `reclassify` | name the animals of stored events again from their clips (prints; `--yes` stores); works while Zoologist runs |
 | `prune` | delete chosen old events with their clips (lists them; `--yes` deletes) |
 | `janitor --dry-run` | show what the retention rules would delete now |
 
-`reclassify` and `prune` change the database, so stop Zoologist first. In Docker, run any command
-with `docker compose run --rm zoologist <command> --config /config/zoologist.toml …`.
+`prune` changes the database directly, so stop Zoologist first. `reclassify` works either way: while
+Zoologist runs, it asks the server to do the work. In Docker, run commands inside the running
+container with `docker compose exec zoologist zoologist <command> --config /config/zoologist.toml …`,
+or in a new one with `docker compose run --rm zoologist <command> …`.
+
+In the dashboard, each event has a **Wrong** button: say what was really there, and the event is kept as
+a test case for tuning detection. Animal events also have **Name again**.
 
 ## More documentation
 

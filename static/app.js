@@ -23,6 +23,7 @@ const state = {
   camera: "",
   label: "",
   species: "", // exact common name, "" for none
+  wrong: false, // only events marked as wrong
   date: null,
   cameras: [], // from /cameras
   cameraNames: new Map(),
@@ -42,8 +43,10 @@ const $ = (selector) => document.querySelector(selector);
 
 // ---------- helpers ----------
 
-async function api(path) {
-  const res = await fetch(`${API}/${path}`, { headers: { Accept: "application/json" } });
+async function api(path, { method = "GET", body } = {}) {
+  const headers = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API}/${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -357,6 +360,7 @@ function matchesFilters(e) {
   if (state.camera && e.camera_id !== state.camera) return false;
   if (state.label && e.label !== state.label) return false;
   if (state.species && e.species?.common_name?.toLowerCase() !== state.species.toLowerCase()) return false;
+  if (state.wrong && !e.feedback) return false;
   return true;
 }
 
@@ -376,6 +380,7 @@ function tile(e) {
   }
   pic.append(el("span", { class: `badge ${e.label}` }, `${l?.icon || ""} ${l?.name || e.label}`));
   if (e.active) pic.append(el("span", { class: "badge live-badge" }, "LIVE"));
+  if (e.feedback) pic.append(el("span", { class: "badge wrong-badge" }, "✗ wrong"));
   const when = el("span", { class: "when", "data-iso": e.started_at }, fmt.relative(e.started_at));
   const duration = e.active ? "ongoing" : fmt.duration(eventDuration(e));
   return el(
@@ -430,13 +435,14 @@ async function loadEvents(reset = true) {
       label: state.species ? "animal" : state.label,
       species: state.species,
       window: state.window,
+      wrong: state.wrong ? "true" : null,
     })}`);
     for (const e of page.items) putEvent(e);
     state.nextBeforeId = page.next_before_id;
     more.hidden = page.items.length < PAGE;
     const empty = $("#events-empty");
     empty.classList.remove("error");
-    empty.textContent = state.label || state.species || state.camera
+    empty.textContent = state.label || state.species || state.camera || state.wrong
       ? `No events match these filters in the last ${state.window}.`
       : `No events in the last ${state.window}. New ones appear here as they happen.`;
     empty.hidden = state.tiles.size > 0;
@@ -452,6 +458,7 @@ function syncChips() {
   for (const b of document.querySelectorAll("#label-chips button[data-label]")) {
     b.setAttribute("aria-pressed", String(b.dataset.label === (state.species ? "animal" : state.label)));
   }
+  $("#wrong-chip").setAttribute("aria-pressed", String(state.wrong));
   const chip = $("#species-chip");
   chip.hidden = !state.species;
   chip.textContent = state.species ? capitalise(state.species) : "";
@@ -543,10 +550,115 @@ function renderViewer(e, fresh = false) {
   } else {
     img.hidden = true;
   }
+  renderFeedback(e);
   const order = tileOrder();
   const i = order.indexOf(e.id);
   $("#viewer-prev").disabled = i <= 0;
   $("#viewer-next").disabled = i < 0 || i >= order.length - 1;
+}
+
+// ---------- marking events wrong, naming animals again ----------
+
+const ACTUAL_TEXT = {
+  nothing: "nothing was there",
+  person: "it was a person",
+  vehicle: "it was a vehicle",
+  animal: "it was an animal",
+  motion: "it was just motion",
+};
+
+function renderFeedback(e) {
+  if (state.feedbackFor !== e.id) {
+    // Another event: close the form and forget the last message.
+    state.feedbackFor = e.id;
+    $("#wrong-form").hidden = true;
+    $("#viewer-action-status").textContent = "";
+  }
+  const f = e.feedback;
+  const note = $("#viewer-feedback");
+  if (f) {
+    const actual = f.actual ?? "nothing";
+    let text = `✗ Marked wrong: ${ACTUAL_TEXT[actual] || actual}`;
+    if (f.species) text += ` (${f.species})`;
+    if (f.note) text += `. “${f.note}”`;
+    note.textContent = text;
+  }
+  note.hidden = !f;
+  $("#viewer-wrong").hidden = !!f;
+  $("#viewer-undo-wrong").hidden = !f;
+  $("#viewer-rename").hidden = !(e.label === "animal" && e.clip_url && !e.active);
+}
+
+function openWrongForm() {
+  const e = state.events.get(state.viewing);
+  if (!e) return;
+  const form = $("#wrong-form");
+  form.reset();
+  for (const input of form.querySelectorAll('input[name="actual"]')) {
+    // "Animal" stays possible for an animal event: the species may be what is wrong.
+    input.disabled = input.value === e.label && e.label !== "animal";
+  }
+  const preset = e.label === "animal" && e.species ? "animal" : "nothing";
+  form.querySelector(`input[name="actual"][value="${preset}"]`).checked = true;
+  syncWrongForm();
+  form.hidden = false;
+  form.querySelector(`input[name="actual"]:checked`).focus();
+}
+
+function syncWrongForm() {
+  const actual = $("#wrong-form").querySelector('input[name="actual"]:checked')?.value;
+  $("#wrong-species-field").hidden = actual !== "animal";
+}
+
+async function saveWrong(ev) {
+  ev.preventDefault();
+  const id = state.viewing;
+  const form = new FormData($("#wrong-form"));
+  const status = $("#viewer-action-status");
+  try {
+    const body = { actual: form.get("actual"), note: form.get("note") || null };
+    if (body.actual === "animal") body.species = form.get("species") || null;
+    const e = await api(`events/${id}/feedback`, { method: "POST", body });
+    $("#wrong-form").hidden = true;
+    status.textContent = "Saved. Thank you: this helps tune detection.";
+    putEvent(e);
+  } catch (err) {
+    status.textContent = `Could not save: ${err.message}`;
+  }
+}
+
+async function undoWrong() {
+  const id = state.viewing;
+  try {
+    const e = await api(`events/${id}/feedback`, { method: "DELETE" });
+    $("#viewer-action-status").textContent = "";
+    putEvent(e);
+  } catch (err) {
+    $("#viewer-action-status").textContent = `Could not undo: ${err.message}`;
+  }
+}
+
+async function nameAgain() {
+  const id = state.viewing;
+  const button = $("#viewer-rename");
+  const status = $("#viewer-action-status");
+  button.disabled = true;
+  status.textContent = "Looking at the clip again… (up to a minute)";
+  try {
+    const result = await api(`events/${id}/reclassify`, { method: "POST", body: { store: true } });
+    const text = {
+      named: () => `Named: ${capitalise(result.species.common_name)} ${fmt.percent(result.species.score)}`,
+      not_animal: () => `Not an animal: a ${result.label}. Relabelled.`,
+      unknown: () => "No confident answer: left as it was.",
+      no_animal: () => "No animal found in the clip: left as it was.",
+    }[result.outcome];
+    status.textContent = text ? text() : "Done.";
+    if (state.viewing === id) putEvent(await api(`events/${id}`));
+  } catch (err) {
+    status.textContent = `Could not name it: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function refreshViewer(id) {
@@ -949,6 +1061,19 @@ async function init() {
     b.addEventListener("click", () => setLabelFilter(b.dataset.label));
   }
   $("#species-chip").addEventListener("click", () => setSpeciesFilter(""));
+  $("#wrong-chip").addEventListener("click", () => {
+    state.wrong = !state.wrong;
+    syncChips();
+    loadEvents();
+  });
+  $("#viewer-wrong").addEventListener("click", openWrongForm);
+  $("#viewer-undo-wrong").addEventListener("click", undoWrong);
+  $("#viewer-rename").addEventListener("click", nameAgain);
+  $("#wrong-form").addEventListener("submit", saveWrong);
+  $("#wrong-form").addEventListener("change", syncWrongForm);
+  $("#wrong-cancel").addEventListener("click", () => {
+    $("#wrong-form").hidden = true;
+  });
   $("#load-more").addEventListener("click", () => loadEvents(false));
   let resizeTimer = null;
   let lastWidth = window.innerWidth;

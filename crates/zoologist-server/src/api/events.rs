@@ -12,14 +12,14 @@ use tower_http::services::ServeFile;
 use zoologist_core::Label;
 use zoologist_core::config::CameraKind;
 use zoologist_core::yuv::i420_to_rgb_full;
-use zoologist_store::{EventQuery, EventRecord, MAX_PAGE, Order};
+use zoologist_store::{EventPatch, EventQuery, EventRecord, Feedback, MAX_PAGE, Order};
 use zoologist_video::mp4w::codec_string;
 use zoologist_video::snapshot::encode_jpeg;
 
 use crate::live::viewer_stream;
 
 use super::{ApiError, ApiResult, EventJson};
-use crate::app::AppState;
+use crate::app::{ApiEvent, AppState};
 
 /// Events per page when `limit` is not given.
 const DEFAULT_LIMIT: usize = 50;
@@ -118,6 +118,8 @@ pub struct ListParams {
     species: Option<String>,
     /// `1h`, `6h`, `24h`, `7d` or `30d`: only events that started within it (default: all).
     window: Option<String>,
+    /// `true`: only events someone marked as wrong.
+    wrong: Option<String>,
 }
 
 fn parse_id(name: &str, value: Option<&str>) -> ApiResult<Option<u64>> {
@@ -168,6 +170,7 @@ pub async fn list(
         since: empty_to_none(p.window)
             .map(|w| super::parse_window(Some(&w)).map(|(_, since)| since))
             .transpose()?,
+        marked_wrong: matches!(p.wrong.as_deref(), Some("true" | "1")),
     };
     let page = app.store.call(move |s| s.list_events(&query)).await?;
     let items: Vec<EventJson> = page.items.iter().map(EventJson::new).collect();
@@ -197,6 +200,140 @@ pub async fn get_one(
     Ok(Json(
         serde_json::to_value(EventJson::new(&record)).unwrap_or_default(),
     ))
+}
+
+/// Stores a changed event and tells the dashboards; returns it as JSON.
+async fn save(app: &AppState, id: u64, patch: EventPatch) -> ApiResult<serde_json::Value> {
+    let record = app
+        .store
+        .call(move |s| s.update_event(id, &patch))
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such event"))?;
+    let json = serde_json::to_value(EventJson::new(&record)).unwrap_or_default();
+    app.publish(ApiEvent::Updated(record));
+    Ok(json)
+}
+
+/// Body of `POST /events/{id}/feedback`.
+#[derive(Debug, Deserialize)]
+pub struct FeedbackBody {
+    /// `person`, `vehicle`, `animal`, `motion`, or `nothing` for a false alarm.
+    actual: String,
+    species: Option<String>,
+    note: Option<String>,
+}
+
+/// `POST /events/{id}/feedback`: marks an event as wrong and says what it really was.
+pub async fn set_feedback(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<FeedbackBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let record = load(&app, &id).await?;
+    let actual = match body.actual.as_str() {
+        "nothing" => None,
+        other => Some(other.parse::<Label>().map_err(|_| {
+            ApiError::bad_request("actual must be person, vehicle, animal, motion or nothing")
+        })?),
+    };
+    let text = |v: Option<String>| {
+        v.map(|s| s.trim().chars().take(200).collect::<String>())
+            .filter(|s| !s.is_empty())
+    };
+    let feedback = Feedback {
+        actual,
+        species: text(body.species),
+        note: text(body.note),
+        at: chrono::Utc::now(),
+    };
+    tracing::info!(event = record.id, actual = %body.actual, "marked wrong");
+    let patch = EventPatch {
+        feedback: Some(Some(feedback)),
+        ..Default::default()
+    };
+    Ok(Json(save(&app, record.id, patch).await?))
+}
+
+/// `DELETE /events/{id}/feedback`: takes the "wrong" mark back.
+pub async fn clear_feedback(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let record = load(&app, &id).await?;
+    let patch = EventPatch {
+        feedback: Some(None),
+        ..Default::default()
+    };
+    Ok(Json(save(&app, record.id, patch).await?))
+}
+
+/// Body of `POST /events/{id}/reclassify`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReclassifyBody {
+    /// Store the answer (otherwise only return it).
+    #[serde(default)]
+    store: bool,
+}
+
+/// One reclassification at a time, so live cameras keep most of the CPU.
+static RECLASSIFY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// `POST /events/{id}/reclassify`: names an animal event's animal again from its clip.
+pub async fn reclassify(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ReclassifyBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let record = load(&app, &id).await?;
+    if record.label != Label::Animal {
+        return Err(ApiError::bad_request(
+            "only animal events can be classified",
+        ));
+    }
+    if record.clip_path.is_none() || record.ended_at.is_none() {
+        return Err(ApiError::bad_request("the event has no clip yet"));
+    }
+    let unavailable = |why: String| ApiError(axum::http::StatusCode::SERVICE_UNAVAILABLE, why);
+    let detector = app
+        .detector
+        .clone()
+        .ok_or_else(|| unavailable("the detector is not loaded".into()))?;
+    let species = app.species.clone().ok_or_else(|| {
+        unavailable(
+            app.species_problem
+                .clone()
+                .unwrap_or_else(|| "the species classifier is turned off".into()),
+        )
+    })?;
+    let _slot = RECLASSIFY
+        .acquire()
+        .await
+        .map_err(|_| unavailable("shutting down".into()))?;
+    let config = app.config.clone();
+    let event = record.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::reclassify::reclassify_one(&config, &detector, &species, &event, true)
+    })
+    .await
+    .map_err(|e| ApiError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| {
+        ApiError(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{e:#}"),
+        )
+    })?;
+    tracing::info!(
+        event = record.id,
+        ?outcome,
+        store = body.store,
+        "reclassified"
+    );
+    if body.store
+        && let Some(patch) = outcome.patch()
+    {
+        save(&app, record.id, patch).await?;
+    }
+    Ok(Json(serde_json::to_value(&outcome).unwrap_or_default()))
 }
 
 /// Serves a file of an event (with Range support), or 404 if it is missing.

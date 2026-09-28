@@ -22,7 +22,7 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use zoologist_core::{Label, local_date_hour};
 
 pub use records::{
-    ClipState, EventPatch, EventQuery, EventRecord, HourCounts, NewEvent, Order, Page,
+    ClipState, EventPatch, EventQuery, EventRecord, Feedback, HourCounts, NewEvent, Order, Page,
     SegmentRecord, SpeciesStat,
 };
 
@@ -161,6 +161,7 @@ impl Store {
                 clip_path: None,
                 clip_bytes: None,
                 clip_state: ClipState::Pending,
+                feedback: None,
             };
             txn.open_table(EVENTS)?
                 .insert(id, serde_json::to_vec(&record)?.as_slice())?;

@@ -17,6 +17,18 @@ pub enum ClipState {
     Purged,
 }
 
+/// Someone's verdict that an event is wrong, from the dashboard's "Wrong" button. Kept with the
+/// event (which is not changed) as a test case for tuning detection and classification.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Feedback {
+    /// What was really there, or `None` for nothing at all (a false alarm).
+    pub actual: Option<Label>,
+    /// The right species, when an animal was named wrongly (free text).
+    pub species: Option<String>,
+    pub note: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
 /// One stored event.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EventRecord {
@@ -40,6 +52,9 @@ pub struct EventRecord {
     pub clip_path: Option<String>,
     pub clip_bytes: Option<u64>,
     pub clip_state: ClipState,
+    /// Set when someone marked the event as wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<Feedback>,
 }
 
 /// Fields of a new event; the store fills in the id, local date and clip state.
@@ -72,6 +87,8 @@ pub struct EventPatch {
     pub clip_path: Option<Option<String>>,
     pub clip_bytes: Option<Option<u64>>,
     pub clip_state: Option<ClipState>,
+    /// `Some(None)` removes the feedback.
+    pub feedback: Option<Option<Feedback>>,
 }
 
 impl EventPatch {
@@ -109,6 +126,9 @@ impl EventPatch {
         if let Some(v) = self.clip_state {
             r.clip_state = v;
         }
+        if let Some(v) = &self.feedback {
+            r.feedback = v.clone();
+        }
     }
 }
 
@@ -137,6 +157,8 @@ pub struct EventQuery {
     pub species: Option<String>,
     /// Only events that started at or after this time.
     pub since: Option<DateTime<Utc>>,
+    /// Only events someone marked as wrong.
+    pub marked_wrong: bool,
 }
 
 impl Default for EventQuery {
@@ -150,6 +172,7 @@ impl Default for EventQuery {
             label: None,
             species: None,
             since: None,
+            marked_wrong: false,
         }
     }
 }
@@ -159,6 +182,7 @@ impl EventQuery {
         self.camera.as_deref().is_none_or(|c| e.camera_id == c)
             && self.label.is_none_or(|l| e.label == l)
             && self.since.is_none_or(|since| e.started_at >= since)
+            && (!self.marked_wrong || e.feedback.is_some())
             && self.species.as_deref().is_none_or(|wanted| {
                 e.species.as_ref().is_some_and(|s| {
                     s.common_name.eq_ignore_ascii_case(wanted)

@@ -57,6 +57,10 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 - ⬜ A pending clip shows the snapshot and "Clip is being prepared…", polls every 3 s, and plays once it is ready.
 - ✅ A failed or purged clip shows "Clip not available."
 - ✅ Esc and × close the viewer and pause the video.
+- ✅ "✗ Wrong" opens a form (Nothing / Person / Vehicle / Animal / Just motion, species for an animal, note).
+  Saving shows the verdict, puts a "✗ wrong" badge on the tile, and "Undo" takes it back. The "✗ Marked wrong"
+  chip lists only marked events.
+- ✅ "Name again" on an animal event runs the classifier on its clip and shows the answer.
 - ✅ ←/→ and the Newer/Older buttons step through the tiles in order.
 
 ## Cameras and species

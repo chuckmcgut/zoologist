@@ -91,13 +91,14 @@ fn main() -> ExitCode {
             since,
             all,
             yes,
+            server,
         } => with_config(&config, |cfg| {
             let filter = zoologist_server::reclassify::ReclassifyFilter {
                 cameras,
                 since,
                 all,
             };
-            zoologist_server::reclassify::reclassify(cfg, &filter, yes)
+            zoologist_server::reclassify::reclassify(cfg, &filter, yes, server)
         }),
         Command::Healthcheck { url } => healthcheck::run(&url),
         Command::Janitor { config, dry_run } => with_config(&config, |cfg| janitor(&cfg, dry_run)),

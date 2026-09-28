@@ -156,8 +156,8 @@ pub enum Command {
         yes: bool,
     },
     /// Name the animals of stored events again from their clips (e.g. events stored while the
-    /// species model was missing). Prints the answers; stores them with `--yes`. Stop Zoologist
-    /// first.
+    /// species model was missing). Prints the answers; stores them with `--yes`. Works whether
+    /// Zoologist is running or not.
     Reclassify {
         #[arg(long, default_value = DEFAULT_CONFIG)]
         config: PathBuf,
@@ -173,6 +173,10 @@ pub enum Command {
         /// Store the answers (otherwise only print them).
         #[arg(long)]
         yes: bool,
+        /// The running Zoologist to ask when its database is in use (default:
+        /// http://127.0.0.1:<port from the config>).
+        #[arg(long)]
+        server: Option<String>,
     },
     /// Insert fake events so the UI can be checked without cameras (plan Step 10.2).
     /// Refuses to touch a database that already has events.

@@ -12,7 +12,7 @@ use axum::Json;
 use axum::Router;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde::Serialize;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
@@ -33,6 +33,11 @@ pub fn router(app: AppState) -> Router {
         .route("/cameras/{id}/live.mp4", get(events::live_mp4))
         .route("/events", get(events::list))
         .route("/events/{id}", get(events::get_one))
+        .route(
+            "/events/{id}/feedback",
+            post(events::set_feedback).delete(events::clear_feedback),
+        )
+        .route("/events/{id}/reclassify", post(events::reclassify))
         .route("/events/{id}/clip.mp4", get(events::clip))
         .route("/events/{id}/snapshot.jpg", get(events::snapshot))
         .route("/events/{id}/thumb.jpg", get(events::thumb))

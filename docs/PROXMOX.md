@@ -83,14 +83,17 @@ docker compose run --rm zoologist bench --config /config/zoologist.toml
 docker compose restart zoologist    # open events are closed and clips finished before it stops
 ```
 
-Commands that change the database need Zoologist stopped (the database can only be opened once):
+Name the animals of events stored without a species (e.g. while the model was missing). It runs inside
+the running container and asks Zoologist to do the work; it prints the answers, and `--yes` stores them:
+
+```bash
+docker compose exec zoologist zoologist reclassify --config /config/zoologist.toml
+```
+
+Deleting old false events changes the database directly, so stop Zoologist first:
 
 ```bash
 docker compose stop zoologist
-# Name the animals of events stored without a species (e.g. while the model was missing).
-# Prints the answers; add --yes to store them.
-docker compose run --rm zoologist reclassify --config /config/zoologist.toml
-# Delete old false events with their clips. Lists them; add --yes to delete.
 docker compose run --rm zoologist prune --config /config/zoologist.toml \
   --camera driveway --label motion --before 2026-09-24
 docker compose start zoologist

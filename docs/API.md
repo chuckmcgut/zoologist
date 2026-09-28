@@ -1,12 +1,16 @@
 # HTTP API
 
-Everything is under `/api/v1` on `server.bind` (default port 8090) and only uses `GET`. The web UI is
-served from `server.static_dir` at `/`.
+Everything is under `/api/v1` on `server.bind` (default port 8090). Reading uses `GET`; the only
+changes are marking an event wrong and naming its animal again (`POST`/`DELETE`, JSON bodies). The
+dashboard is served at `/` (built into the program, or from `server.static_dir` if it holds an
+`index.html`).
 
 - Timestamps are RFC 3339 in UTC (`2026-09-19T12:47:26.847756Z`). Dates and hours in charts use the
   station time zone (`station.timezone`).
 - Errors are JSON, `{"error": "…"}`, with status 400 (bad parameter), 404 (unknown or missing) or 500.
-- CORS allows the origins in `server.cors_allow_origins` (`["*"]` by default).
+- CORS allows the origins in `server.cors_allow_origins` (`["*"]` by default), for `GET` only. The
+  `POST` requests need `Content-Type: application/json`, so another web page cannot send them
+  without the browser asking first, and that request is refused.
 
 The examples use `Z=http://localhost:8090/api/v1`.
 
@@ -42,7 +46,11 @@ Every route that returns events uses this shape: the stored record, plus links a
   "clip_url": "/api/v1/events/1/clip.mp4",          // null unless clip_state is ready
   "snapshot_url": "/api/v1/events/1/snapshot.jpg",
   "thumb_url": "/api/v1/events/1/thumb.jpg",
-  "active": false
+  "active": false,
+  "feedback": {                      // only when someone marked the event wrong
+    "actual": null,                  // what was really there; null = nothing
+    "species": null, "note": "dark stump", "at": "2026-09-28T20:51:14Z"
+  }
 }
 ```
 
@@ -162,6 +170,26 @@ One event, or 404.
 ```sh
 curl -s $Z/events/1
 ```
+
+### `POST /events/{id}/feedback` and `DELETE /events/{id}/feedback`
+
+Marks an event as wrong, or takes the mark back. The event is not changed otherwise: the feedback is
+kept with it as a test case for tuning. Body: `{"actual": "nothing" | "person" | "vehicle" | "animal" |
+"motion", "species": "American crow", "note": "…"}` (`species` and `note` are optional). Returns the
+event. `GET /events?wrong=true` lists the marked events.
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' -d '{"actual":"nothing","note":"stump"}' "$Z/events/12/feedback"
+```
+
+### `POST /events/{id}/reclassify`
+
+Names an animal event's animal again from its clip (detector and species classifier, as for a live
+event, behind the live cameras; one at a time). Body `{"store": true}` stores the answer. Returns
+`{"outcome": "named", "species": {…}}`, `{"outcome": "not_animal", "label": "person"}` (stored as a
+relabel), `{"outcome": "unknown"}` or `{"outcome": "no_animal"}`. 400 for a non-animal event or one
+without a clip, 503 when the models are not loaded. Can take a minute. `zoologist reclassify` uses it
+when Zoologist is running.
 
 ### `GET /events/{id}/clip.mp4`
 

@@ -70,6 +70,7 @@
         <button type="button" data-label="vehicle">🚗 Vehicle</button>
         <button type="button" data-label="animal">🦌 Animal</button>
         <button type="button" data-label="motion">〰️ Motion</button>
+        <button type="button" id="wrong-chip" aria-pressed="false" title="Only events marked as wrong">✗ Marked wrong</button>
         <button type="button" id="species-chip" class="species-chip" hidden aria-label="Remove species filter"></button>
       </div>
       <div id="events" class="tiles"></div>
@@ -108,6 +109,35 @@
     <h3 id="viewer-title"></h3>
     <p id="viewer-meta" class="muted"></p>
     <p id="viewer-species" class="muted small"></p>
+    <div id="viewer-actions" class="viewer-actions">
+      <p id="viewer-feedback" class="feedback-note" hidden></p>
+      <button type="button" id="viewer-wrong" class="button">✗ Wrong</button>
+      <button type="button" id="viewer-undo-wrong" class="button" hidden>Undo “wrong”</button>
+      <button type="button" id="viewer-rename" class="button" hidden title="Run the species classifier on this clip again">Name again</button>
+      <span id="viewer-action-status" class="muted small" role="status"></span>
+    </div>
+    <form id="wrong-form" class="wrong-form" hidden>
+      <fieldset>
+        <legend>What was really there?</legend>
+        <div class="chips" id="wrong-choices">
+          <label><input type="radio" name="actual" value="nothing" checked> Nothing</label>
+          <label><input type="radio" name="actual" value="person"> 🧍 Person</label>
+          <label><input type="radio" name="actual" value="vehicle"> 🚗 Vehicle</label>
+          <label><input type="radio" name="actual" value="animal"> 🦌 Animal</label>
+          <label><input type="radio" name="actual" value="motion"> 〰️ Just motion</label>
+        </div>
+      </fieldset>
+      <label class="wrong-field" id="wrong-species-field">Species (if you know it)
+        <input type="text" name="species" maxlength="200" autocomplete="off" placeholder="e.g. American crow">
+      </label>
+      <label class="wrong-field">Note
+        <input type="text" name="note" maxlength="200" autocomplete="off" placeholder="optional">
+      </label>
+      <div class="wrong-buttons">
+        <button type="submit" class="button">Save</button>
+        <button type="button" id="wrong-cancel" class="button">Cancel</button>
+      </div>
+    </form>
     <video id="viewer-video" controls autoplay muted playsinline preload="metadata"></video>
     <p id="viewer-clip-note" class="note" hidden></p>
     <img id="viewer-snapshot" alt="" width="1280" height="720">

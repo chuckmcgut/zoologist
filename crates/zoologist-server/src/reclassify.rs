@@ -2,18 +2,24 @@
 //! events stored while the species classifier was not running (a missing model file), or to try
 //! a newer model on old events. Each clip goes through the camera's analysis again, and the best
 //! views of the animal go to the species classifier, as for a live event. Without `yes` the
-//! answers are only printed. Run it with Zoologist stopped: the database can only be opened once.
+//! answers are only printed.
+//!
+//! When Zoologist is running (its database is in use), the command asks the running server to do
+//! the work, one event at a time: `POST /api/v1/events/{id}/reclassify`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
-use zoologist_core::{Config, Label};
-use zoologist_store::{EventPatch, EventRecord, Store};
+use serde::{Deserialize, Serialize};
+use zoologist_core::{Config, Label, SpeciesGuess};
+use zoologist_store::{EventPatch, EventRecord, MAX_PAGE, Store};
 use zoologist_video::mp4r::{read_mp4_index, read_samples};
 use zoologist_video::stream::Codec;
 use zoologist_vision::events::EventUpdate;
+use zoologist_vision::pool::DetectorHandle;
 use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesHandle, SpeciesJob};
 use zoologist_vision::tracker::BestCrop;
 
@@ -23,6 +29,8 @@ use crate::pipeline::{load_detector, load_species};
 
 /// Seconds of whole-picture detection at the start of each clip.
 const TILE_SECONDS: i64 = 2;
+/// How long one event may take on a busy server.
+const SERVER_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Which events to classify again.
 pub struct ReclassifyFilter {
@@ -45,11 +53,149 @@ impl ReclassifyFilter {
     }
 }
 
-pub fn reclassify(config: Config, filter: &ReclassifyFilter, yes: bool) -> Result<()> {
+/// What classifying one event again found.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Outcome {
+    /// The animal was named.
+    Named { species: SpeciesGuess },
+    /// The classifier is sure it is a person or a vehicle, not an animal.
+    NotAnimal { label: Label },
+    /// No confident answer.
+    Unknown,
+    /// The detector finds no animal in the clip.
+    NoAnimal,
+}
+
+impl Outcome {
+    /// The change to store, if any.
+    pub fn patch(&self) -> Option<EventPatch> {
+        match self {
+            Outcome::Named { species } => Some(EventPatch {
+                species: Some(species.clone()),
+                ..Default::default()
+            }),
+            Outcome::NotAnimal { label } => Some(EventPatch {
+                label: Some(*label),
+                ..Default::default()
+            }),
+            Outcome::Unknown | Outcome::NoAnimal => None,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Outcome::Named { species } => format!(
+                "{} ({}) {:.0} %",
+                species.common_name,
+                species.scientific_name,
+                species.score * 100.0
+            ),
+            Outcome::NotAnimal { label } => format!("not an animal, a {label}"),
+            Outcome::Unknown => "no confident answer".into(),
+            Outcome::NoAnimal => "no animal found in the clip".into(),
+        }
+    }
+}
+
+/// Classifies one stored animal event again. `background` puts its detector work behind live
+/// cameras (used inside the running server).
+pub fn reclassify_one(
+    config: &Arc<Config>,
+    detector: &DetectorHandle,
+    species: &SpeciesHandle,
+    e: &EventRecord,
+    background: bool,
+) -> Result<Outcome> {
+    let Some(crops) = animal_crops(config, detector, e, background)? else {
+        return Ok(Outcome::NoAnimal);
+    };
+    Ok(match classify(species, crops, e.top_score) {
+        SpeciesAnswer::Species(guess) => Outcome::Named { species: guess },
+        SpeciesAnswer::NotAnimal(label) => Outcome::NotAnimal { label },
+        SpeciesAnswer::Unknown => Outcome::Unknown,
+    })
+}
+
+/// Tally of a run, printed at the end.
+#[derive(Default)]
+struct Tally {
+    named: usize,
+    relabelled: usize,
+    unknown: usize,
+    skipped: usize,
+}
+
+impl Tally {
+    fn add(&mut self, outcome: &Outcome) {
+        match outcome {
+            Outcome::Named { .. } => self.named += 1,
+            Outcome::NotAnimal { .. } => self.relabelled += 1,
+            Outcome::Unknown => self.unknown += 1,
+            Outcome::NoAnimal => self.skipped += 1,
+        }
+    }
+
+    fn print(&self, yes: bool) {
+        let verb = if yes { "stored" } else { "found, NOT stored" };
+        println!(
+            "\n{verb}: {} named, {} relabelled; {} without a confident answer, {} skipped",
+            self.named, self.relabelled, self.unknown, self.skipped
+        );
+        if !yes && self.named + self.relabelled > 0 {
+            println!("nothing was changed: run again with --yes to store these answers");
+        }
+    }
+}
+
+fn describe_event(e: &EventRecord) -> String {
+    format!(
+        "event {} ({}, {})",
+        e.id,
+        e.camera_id,
+        e.started_at.format("%Y-%m-%d %H:%M")
+    )
+}
+
+/// `server`: the running Zoologist's address, used when the database is in use (default: this
+/// machine, at the config's port).
+pub fn reclassify(
+    config: Config,
+    filter: &ReclassifyFilter,
+    yes: bool,
+    server: Option<String>,
+) -> Result<()> {
     let config = Arc::new(config);
     let dir = &config.server.data_dir;
-    let store = Store::open(&dir.join("zoologist.redb"), config.station.timezone)
-        .context("cannot open the database (stop Zoologist first)")?;
+    match Store::open(&dir.join("zoologist.redb"), config.station.timezone) {
+        Ok(store) => reclassify_here(&config, &store, filter, yes),
+        Err(open_error) => {
+            let server =
+                server.unwrap_or_else(|| format!("http://127.0.0.1:{}", config.server.bind.port()));
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .timeout_global(Some(SERVER_TIMEOUT))
+                .build()
+                .into();
+            if agent.get(format!("{server}/api/v1/health")).call().is_err() {
+                bail!(
+                    "cannot open the database ({open_error}), and no Zoologist answers at \
+                     {server}. Run this where Zoologist runs (docker compose exec zoologist \
+                     zoologist reclassify ...), or give its address with --server."
+                );
+            }
+            println!("Zoologist is running: asking it at {server}");
+            reclassify_on_server(&agent, &server, filter, yes)
+        }
+    }
+}
+
+/// Zoologist is not running: open the database and load the models here.
+fn reclassify_here(
+    config: &Arc<Config>,
+    store: &Store,
+    filter: &ReclassifyFilter,
+    yes: bool,
+) -> Result<()> {
     let chosen: Vec<EventRecord> = store
         .events_between(DateTime::<Utc>::UNIX_EPOCH, None)?
         .into_iter()
@@ -59,83 +205,107 @@ pub fn reclassify(config: Config, filter: &ReclassifyFilter, yes: bool) -> Resul
         println!("no animal events to classify");
         return Ok(());
     }
-    let species = match load_species(&config) {
+    let species = match load_species(config) {
         Ok(Some(handle)) => handle,
         Ok(None) => bail!("the species classifier is turned off ([species] enabled = false)"),
         Err(problem) => bail!("{problem}"),
     };
-    let (detector, _threads) = load_detector(&config)?;
+    let (detector, _threads) = load_detector(config)?;
     println!("{} animal events to classify", chosen.len());
-
-    let (mut named, mut relabelled, mut unknown, mut skipped) = (0, 0, 0, 0);
+    let mut tally = Tally::default();
     for e in &chosen {
-        let what = format!(
-            "event {} ({}, {})",
-            e.id,
-            e.camera_id,
-            e.started_at.format("%Y-%m-%d %H:%M")
-        );
-        let crops = match animal_crops(&config, &detector, e) {
-            Ok(Some(crops)) => crops,
-            Ok(None) => {
-                println!("{what}: no animal found in the clip");
-                skipped += 1;
-                continue;
-            }
+        let outcome = match reclassify_one(config, &detector, &species, e, false) {
+            Ok(outcome) => outcome,
             Err(err) => {
-                println!("{what}: skipped: {err}");
-                skipped += 1;
+                println!("{}: skipped: {err:#}", describe_event(e));
+                tally.skipped += 1;
                 continue;
             }
         };
-        let patch = match classify(&species, crops, e.top_score) {
-            SpeciesAnswer::Species(guess) => {
-                println!(
-                    "{what}: {} ({}) {:.0} %",
-                    guess.common_name,
-                    guess.scientific_name,
-                    guess.score * 100.0
-                );
-                named += 1;
-                EventPatch {
-                    species: Some(guess),
-                    ..Default::default()
-                }
-            }
-            SpeciesAnswer::NotAnimal(label) => {
-                println!("{what}: not an animal, a {label}");
-                relabelled += 1;
-                EventPatch {
-                    label: Some(label),
-                    ..Default::default()
-                }
-            }
-            SpeciesAnswer::Unknown => {
-                println!("{what}: no confident answer");
-                unknown += 1;
-                continue;
-            }
-        };
-        if yes {
+        print_outcome(e, &outcome, yes);
+        tally.add(&outcome);
+        if yes && let Some(patch) = outcome.patch() {
             store.update_event(e.id, &patch)?;
         }
     }
-    let verb = if yes { "stored" } else { "found (not stored)" };
-    println!(
-        "\n{verb}: {named} named, {relabelled} relabelled; {unknown} without a confident answer, \
-         {skipped} skipped"
-    );
-    if !yes && named + relabelled > 0 {
-        println!("run again with --yes to store them");
+    tally.print(yes);
+    Ok(())
+}
+
+fn print_outcome(e: &EventRecord, outcome: &Outcome, yes: bool) {
+    let stored = if !yes && outcome.patch().is_some() {
+        " (not stored)"
+    } else {
+        ""
+    };
+    println!("{}: {}{stored}", describe_event(e), outcome.describe());
+}
+
+/// Zoologist is running: list the events through its API and let it do the work.
+fn reclassify_on_server(
+    agent: &ureq::Agent,
+    server: &str,
+    filter: &ReclassifyFilter,
+    yes: bool,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Page {
+        items: Vec<EventRecord>,
+        next_before_id: Option<u64>,
     }
+    let mut chosen = Vec::new();
+    let mut before: Option<u64> = None;
+    loop {
+        let mut url = format!("{server}/api/v1/events?label=animal&limit={MAX_PAGE}");
+        if let Some(b) = before {
+            url.push_str(&format!("&before_id={b}"));
+        }
+        let page: Page = agent
+            .get(&url)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .with_context(|| format!("cannot list events at {url}"))?;
+        let done = page.items.is_empty() || page.next_before_id.is_none();
+        chosen.extend(page.items.into_iter().filter(|e| filter.matches(e)));
+        if done {
+            break;
+        }
+        before = page.next_before_id;
+    }
+    chosen.reverse(); // oldest first, as when working on the database directly
+    if chosen.is_empty() {
+        println!("no animal events to classify");
+        return Ok(());
+    }
+    println!("{} animal events to classify", chosen.len());
+    let mut tally = Tally::default();
+    for e in &chosen {
+        let url = format!("{server}/api/v1/events/{}/reclassify", e.id);
+        let result = agent
+            .post(&url)
+            .send_json(serde_json::json!({ "store": yes }))
+            .and_then(|mut r| r.body_mut().read_json::<Outcome>());
+        match result {
+            Ok(outcome) => {
+                print_outcome(e, &outcome, yes);
+                tally.add(&outcome);
+            }
+            Err(err) => {
+                println!("{}: skipped: {err}", describe_event(e));
+                tally.skipped += 1;
+            }
+        }
+    }
+    tally.print(yes);
     Ok(())
 }
 
 /// The best views of the animal in an event's clip, or `None` if the clip shows none.
 fn animal_crops(
     config: &Arc<Config>,
-    detector: &zoologist_vision::pool::DetectorHandle,
+    detector: &DetectorHandle,
     e: &EventRecord,
+    background: bool,
 ) -> Result<Option<Vec<BestCrop>>> {
     let camera = config
         .cameras
@@ -156,7 +326,7 @@ fn animal_crops(
     // sitting still), then where there is motion, as when the event was recorded. The whole
     // picture all the time costs minutes per clip.
     let options = AnalysisOptions {
-        background: false,
+        background,
         tiles_until: Some(e.started_at + chrono::Duration::seconds(TILE_SECONDS)),
     };
     let (updates, _) = analyse_recording(
@@ -241,6 +411,7 @@ mod tests {
             clip_path: Some("clips/1.mp4".into()),
             clip_bytes: None,
             clip_state: ClipState::Ready,
+            feedback: None,
         }
     }
 
