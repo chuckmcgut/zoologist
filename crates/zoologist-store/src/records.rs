@@ -135,6 +135,8 @@ pub struct EventQuery {
     pub label: Option<Label>,
     /// Matches the species' common or scientific name, ignoring case.
     pub species: Option<String>,
+    /// Only events that started at or after this time.
+    pub since: Option<DateTime<Utc>>,
 }
 
 impl Default for EventQuery {
@@ -147,6 +149,7 @@ impl Default for EventQuery {
             camera: None,
             label: None,
             species: None,
+            since: None,
         }
     }
 }
@@ -155,6 +158,7 @@ impl EventQuery {
     pub(crate) fn matches(&self, e: &EventRecord) -> bool {
         self.camera.as_deref().is_none_or(|c| e.camera_id == c)
             && self.label.is_none_or(|l| e.label == l)
+            && self.since.is_none_or(|since| e.started_at >= since)
             && self.species.as_deref().is_none_or(|wanted| {
                 e.species.as_ref().is_some_and(|s| {
                     s.common_name.eq_ignore_ascii_case(wanted)

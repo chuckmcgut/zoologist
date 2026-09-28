@@ -6,6 +6,7 @@ mod stats;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod ui;
 
 use axum::Json;
 use axum::Router;
@@ -21,7 +22,8 @@ use zoologist_store::{ClipState, EventRecord, StoreError};
 
 use crate::app::AppState;
 
-/// Builds the whole HTTP service: the API plus the UI from `server.static_dir`.
+/// Builds the whole HTTP service: the API plus the dashboard (from `server.static_dir` when it
+/// holds an `index.html`, otherwise the copy built into the program).
 pub fn router(app: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health::health))
@@ -45,13 +47,36 @@ pub fn router(app: AppState) -> Router {
     // excluded by the default predicate.
     let compress = CompressionLayer::new()
         .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/")));
-    let ui = ServeDir::new(&app.config.server.static_dir).append_index_html_on_directories(true);
-    Router::new()
-        .nest("/api/v1", api)
-        .fallback_service(ui)
-        .layer(compress)
-        .layer(cors)
-        .with_state(app)
+    let static_dir = &app.config.server.static_dir;
+    let router = Router::new().nest("/api/v1", api);
+    let router = if static_dir.join("index.html").is_file() {
+        tracing::info!(dir = %static_dir.display(), "serving the dashboard from disk");
+        router.fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
+    } else {
+        router.fallback(ui::built_in)
+    };
+    router.layer(compress).layer(cors).with_state(app)
+}
+
+/// The time windows the UI offers, with their length in hours.
+const WINDOWS: [(&str, i64); 5] = [
+    ("1h", 1),
+    ("6h", 6),
+    ("24h", 24),
+    ("7d", 7 * 24),
+    ("30d", 30 * 24),
+];
+
+/// Parses a `window` parameter (default 24h) into its name and start time.
+pub(crate) fn parse_window(
+    window: Option<&str>,
+) -> ApiResult<(&'static str, chrono::DateTime<chrono::Utc>)> {
+    let name = window.unwrap_or("24h");
+    let (name, hours) = WINDOWS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| ApiError::bad_request("window must be one of 1h, 6h, 24h, 7d, 30d"))?;
+    Ok((name, chrono::Utc::now() - chrono::Duration::hours(*hours)))
 }
 
 fn cors_layer(origins: &[String]) -> CorsLayer {

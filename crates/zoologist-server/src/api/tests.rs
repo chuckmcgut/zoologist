@@ -295,6 +295,63 @@ async fn static_ui_is_served() {
     assert_eq!(&body[..], b"<h1>hi</h1>");
 }
 
+/// Without an `index.html` in `static_dir` (e.g. a container run from another directory), the
+/// dashboard built into the program is served.
+#[tokio::test]
+async fn the_built_in_dashboard_is_served_when_static_dir_has_none() {
+    let mut f = fixture();
+    let mut config = (*f.app.config).clone();
+    config.server.static_dir = "does/not/exist".into();
+    f.app.config = std::sync::Arc::new(config);
+    for (uri, status, content_type, contains) in [
+        ("/", StatusCode::OK, "text/html", "<title>Zoologist</title>"),
+        (
+            "/index.html",
+            StatusCode::OK,
+            "text/html",
+            "<title>Zoologist</title>",
+        ),
+        ("/app.js", StatusCode::OK, "text/javascript", "loadEvents"),
+        ("/style.css", StatusCode::OK, "text/css", "dialog"),
+        ("/favicon.svg", StatusCode::OK, "image/svg+xml", "<svg"),
+        ("/../Cargo.toml", StatusCode::NOT_FOUND, "text/plain", ""),
+    ] {
+        let res = router(f.app.clone())
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), status, "{uri}");
+        let ct = res.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with(content_type), "{uri}: {ct}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains(contains), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn the_window_limits_the_event_list() {
+    let f = fixture();
+    for minutes_ago in [10, 3 * 60, 3 * 24 * 60] {
+        f.app
+            .store
+            .insert_event(&new_event(Label::Person, minutes_ago))
+            .unwrap();
+    }
+    let count = |body: serde_json::Value| body["items"].as_array().unwrap().len();
+    let (_, all) = get(&f.app, "/api/v1/events").await;
+    assert_eq!(count(all), 3, "no window: everything");
+    for (window, expected) in [("1h", 1), ("6h", 2), ("24h", 2), ("7d", 3)] {
+        let (status, body) = get(&f.app, &format!("/api/v1/events?window={window}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(count(body), expected, "{window}");
+    }
+    let (status, _) = get(&f.app, "/api/v1/events?window=2h").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 /// Reads SSE frames from a response body until `n` data frames arrived.
 async fn read_sse(body: Body, n: usize) -> Vec<(String, String, serde_json::Value)> {
     let mut stream = body.into_data_stream();

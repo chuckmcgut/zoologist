@@ -116,6 +116,8 @@ pub struct ListParams {
     camera: Option<String>,
     label: Option<String>,
     species: Option<String>,
+    /// `1h`, `6h`, `24h`, `7d` or `30d`: only events that started within it (default: all).
+    window: Option<String>,
 }
 
 fn parse_id(name: &str, value: Option<&str>) -> ApiResult<Option<u64>> {
@@ -163,6 +165,9 @@ pub async fn list(
         camera: empty_to_none(p.camera),
         label,
         species: empty_to_none(p.species),
+        since: empty_to_none(p.window)
+            .map(|w| super::parse_window(Some(&w)).map(|(_, since)| since))
+            .transpose()?,
     };
     let page = app.store.call(move |s| s.list_events(&query)).await?;
     let items: Vec<EventJson> = page.items.iter().map(EventJson::new).collect();

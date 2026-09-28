@@ -14,7 +14,8 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 
 ## Header and filters
 
-- ☐ The header and the tab title both read "Zoologist".
+- ✅ The header and the tab title both read "Zoologist".
+- ✅ The page works without a `static/` folder: the dashboard is built into the program.
 - ✅ The status line reads "Watching N cameras · M events today · detector X ms".
 - ⬜ The status turns amber when one camera is down, and red when all are down or the server is unreachable.
 - ⬜ The status says "detector falling behind" (amber) when detector drops increase between two polls.
@@ -22,7 +23,8 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
   load, and hovering it shows why.
 - ✅ The filter bar stays at the top while scrolling.
 - ✅ The camera select lists "All cameras" plus every enabled camera. Choosing one filters all charts and events.
-- ☐ The window buttons (1h 6h 24h 7d 30d) switch Activity and Animals. 24h is selected at first.
+- ✅ The window buttons (1h 6h 24h 7d 30d) switch Activity, Animals and the Recent events list. 24h is selected at
+  first.
 
 ## Charts
 
@@ -32,7 +34,8 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 - ✅ Clicking a species bar filters events to that species and shows a removable species chip.
 - ✅ By hour draws 24 stacked columns in label colours, with an axis, a legend and `<title>` tooltips.
 - ☐ The date picker cannot go past today in the station time zone.
-- ✅ The chart is drawn at its container's width, so the axis stays readable at 400 px.
+- ✅ The chart is drawn at its container's width and is never scaled up: 120 px tall on a wide screen, 150 px on a
+  phone.
 
 ## Recent events
 

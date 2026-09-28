@@ -97,7 +97,7 @@ docker compose start zoologist
 ```
 
 Relative paths in the config are fine: the container runs from `/`, so `models/x.onnx` is
-`/models/x.onnx` and `data` is `/data`, the two mounts.
+`/models/x.onnx` and `data` is `/data`, the two mounts. The dashboard is built into the program.
 
 ## Troubleshooting
 

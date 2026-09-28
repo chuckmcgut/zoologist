@@ -305,9 +305,10 @@ function renderHourly(container, legend, data) {
     showMessage(container, `No events on ${data.date}.`);
     return;
   }
-  // Draw at the container's own width so the axis text stays readable on phones.
-  const W = Math.max(320, Math.min(1200, container.clientWidth || 960));
-  const H = W < 600 ? 200 : 240, left = 30, right = 6, top = 10, bottom = 24;
+  // Draw at the container's own width, so the chart is never scaled up and the axis text stays
+  // readable on phones. Kept short: it is an overview, not the main thing on the page.
+  const W = Math.max(320, container.clientWidth || 960);
+  const H = W < 600 ? 150 : 120, left = 30, right = 6, top = 8, bottom = 20;
   const plotW = W - left - right, plotH = H - top - bottom;
   const yMax = niceMax(Math.max(...totals));
   const colW = plotW / 24;
@@ -428,13 +429,16 @@ async function loadEvents(reset = true) {
       camera: state.camera,
       label: state.species ? "animal" : state.label,
       species: state.species,
+      window: state.window,
     })}`);
     for (const e of page.items) putEvent(e);
     state.nextBeforeId = page.next_before_id;
     more.hidden = page.items.length < PAGE;
     const empty = $("#events-empty");
     empty.classList.remove("error");
-    empty.textContent = state.label || state.species || state.camera ? "No events match these filters." : "No events yet. New ones appear here as they happen.";
+    empty.textContent = state.label || state.species || state.camera
+      ? `No events match these filters in the last ${state.window}.`
+      : `No events in the last ${state.window}. New ones appear here as they happen.`;
     empty.hidden = state.tiles.size > 0;
   } catch (e) {
     const empty = $("#events-empty");
@@ -932,6 +936,7 @@ async function init() {
       for (const b of document.querySelectorAll("#window-buttons button")) b.setAttribute("aria-pressed", String(b === button));
       loadActivity();
       loadSpeciesStats();
+      loadEvents();
     });
   }
   $("#camera-filter").addEventListener("change", (ev) => {

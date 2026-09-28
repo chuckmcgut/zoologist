@@ -83,7 +83,7 @@ curl -s $Z/health | jq
 }
 ```
 
-`detector` and `species` are `null` when that model is not loaded. `hubs` lists each Reolink Hub importer
+`detector` and `species` are `null` when that model is not loaded. `species_problem` says why the species model is not running although it is enabled (`null` otherwise). `hubs` lists each Reolink Hub importer
 (`state` is `starting`, `ok` or `error`, with `last_error`).
 
 ### `GET /config`
@@ -143,6 +143,7 @@ curl -s -m 5 -o live.mp4 $Z/cameras/nc200-color/live.mp4 && ffprobe live.mp4
 | `camera` | camera id |
 | `label` | `person`, `vehicle`, `animal` or `motion` |
 | `species` | common or scientific name, exact, ignoring case |
+| `window` | `1h`, `6h`, `24h`, `7d` or `30d`: only events that started within it (default: all) |
 
 Returns `{"items": [Event…], "next_before_id": 41, "next_after_id": 90}`. For the next page (newest first), pass
 `before_id=<next_before_id>`. To poll for new events, pass `order=asc&after_id=<next_after_id>`.

@@ -153,7 +153,7 @@ Mac), use `docker buildx build --platform linux/amd64 -t zoologist .`.
 | `zoologist-store` | the event database, statistics and retention |
 | `zoologist-server` | the `zoologist` program: pipeline, web server, API and command-line tools |
 
-`static/` is the dashboard (plain HTML, CSS and JavaScript, no build step), and `vendor/` holds a
+`static/` is the dashboard (plain HTML, CSS and JavaScript, no build step; built into the program), and `vendor/` holds a
 patched copy of the H.264 decoder until an upstream fix is released (see its `PATCHED.md`).
 
 ## Commands

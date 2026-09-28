@@ -27,10 +27,9 @@ RUN mkdir -p /data-empty
 # Default: distroless, no shell, no ffmpeg. Runs as uid 65532.
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=build /zoologist /usr/local/bin/zoologist
-COPY static /static
 COPY --from=build --chown=65532:65532 /data-empty /data
-# Run from / so that relative paths in a config written for a checkout (models/…, data, static)
-# land on the mounts: /models, /data, and the page files at /static.
+# Run from / so that relative paths in a config written for a checkout (models/…, data) land on
+# the mounts /models and /data. The dashboard is built into the program.
 WORKDIR /
 # glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads
 # (decoders, detector workers, recorder) that looks like a leak. Two pools are plenty here.
@@ -45,10 +44,9 @@ FROM debian:bookworm-slim AS runtime-ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /zoologist /usr/local/bin/zoologist
-COPY static /static
 COPY --from=build --chown=65532:65532 /data-empty /data
-# Run from / so that relative paths in a config written for a checkout (models/…, data, static)
-# land on the mounts: /models, /data, and the page files at /static.
+# Run from / so that relative paths in a config written for a checkout (models/…, data) land on
+# the mounts /models and /data. The dashboard is built into the program.
 WORKDIR /
 USER 65532
 # glibc keeps a memory pool per thread and rarely hands freed memory back; with many threads

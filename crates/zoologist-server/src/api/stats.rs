@@ -16,23 +16,9 @@ pub struct StatsParams {
     date: Option<String>,
 }
 
-/// The windows the UI offers, with their length.
-const WINDOWS: [(&str, i64); 5] = [
-    ("1h", 1),
-    ("6h", 6),
-    ("24h", 24),
-    ("7d", 7 * 24),
-    ("30d", 30 * 24),
-];
-
 /// Parses `window` (default 24h) into its name and start time.
 fn window(p: &StatsParams) -> ApiResult<(&'static str, DateTime<Utc>)> {
-    let name = p.window.as_deref().unwrap_or("24h");
-    let (name, hours) = WINDOWS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .ok_or_else(|| ApiError::bad_request("window must be one of 1h, 6h, 24h, 7d, 30d"))?;
-    Ok((name, Utc::now() - chrono::Duration::hours(*hours)))
+    super::parse_window(p.window.as_deref())
 }
 
 fn camera(p: &StatsParams) -> Option<String> {
