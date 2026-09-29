@@ -20,7 +20,9 @@ use zoologist_video::mp4r::{read_mp4_index, read_samples};
 use zoologist_video::stream::Codec;
 use zoologist_vision::events::EventUpdate;
 use zoologist_vision::pool::DetectorHandle;
-use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesHandle, SpeciesJob};
+use zoologist_vision::species::{
+    SpeciesAnswer, SpeciesCrop, SpeciesHandle, SpeciesJob, settle_still_animal,
+};
 use zoologist_vision::tracker::BestCrop;
 
 use crate::analysis::{AnalysisOptions, analyse_recording};
@@ -61,9 +63,12 @@ pub enum Outcome {
     Named { species: SpeciesGuess },
     /// The classifier is sure it is a person or a vehicle, not an animal.
     NotAnimal { label: Label },
-    /// No confident answer.
+    /// It never moved and could not be named, or a second look finds no animal at all: most
+    /// likely a stump or a shadow (`species.still_unnamed_as_motion`). Stored as motion.
+    StillUnnamed,
+    /// No confident answer (it moved, so it is kept as an animal).
     Unknown,
-    /// The detector finds no animal in the clip.
+    /// The detector finds no animal in the clip (`still_unnamed_as_motion` is off).
     NoAnimal,
 }
 
@@ -79,6 +84,10 @@ impl Outcome {
                 label: Some(*label),
                 ..Default::default()
             }),
+            Outcome::StillUnnamed => Some(EventPatch {
+                label: Some(Label::Motion),
+                ..Default::default()
+            }),
             Outcome::Unknown | Outcome::NoAnimal => None,
         }
     }
@@ -92,6 +101,7 @@ impl Outcome {
                 species.score * 100.0
             ),
             Outcome::NotAnimal { label } => format!("not an animal, a {label}"),
+            Outcome::StillUnnamed => "never moved and could not be named: motion".into(),
             Outcome::Unknown => "no confident answer".into(),
             Outcome::NoAnimal => "no animal found in the clip".into(),
         }
@@ -107,11 +117,22 @@ pub fn reclassify_one(
     e: &EventRecord,
     background: bool,
 ) -> Result<Outcome> {
-    let Some(crops) = animal_crops(config, detector, e, background)? else {
-        return Ok(Outcome::NoAnimal);
+    let still_as_motion = config.species.still_unnamed_as_motion;
+    let Some((crops, moved)) = animal_crops(config, detector, e, background)? else {
+        return Ok(if still_as_motion {
+            Outcome::StillUnnamed
+        } else {
+            Outcome::NoAnimal
+        });
     };
-    Ok(match classify(species, crops, e.top_score) {
+    let answer = settle_still_animal(
+        classify(species, crops, e.top_score),
+        moved,
+        still_as_motion,
+    );
+    Ok(match answer {
         SpeciesAnswer::Species(guess) => Outcome::Named { species: guess },
+        SpeciesAnswer::NotAnimal(Label::Motion) if !moved => Outcome::StillUnnamed,
         SpeciesAnswer::NotAnimal(label) => Outcome::NotAnimal { label },
         SpeciesAnswer::Unknown => Outcome::Unknown,
     })
@@ -130,7 +151,7 @@ impl Tally {
     fn add(&mut self, outcome: &Outcome) {
         match outcome {
             Outcome::Named { .. } => self.named += 1,
-            Outcome::NotAnimal { .. } => self.relabelled += 1,
+            Outcome::NotAnimal { .. } | Outcome::StillUnnamed => self.relabelled += 1,
             Outcome::Unknown => self.unknown += 1,
             Outcome::NoAnimal => self.skipped += 1,
         }
@@ -306,7 +327,7 @@ fn animal_crops(
     detector: &DetectorHandle,
     e: &EventRecord,
     background: bool,
-) -> Result<Option<Vec<BestCrop>>> {
+) -> Result<Option<(Vec<BestCrop>, bool)>> {
     let camera = config
         .cameras
         .iter()
@@ -342,25 +363,34 @@ fn animal_crops(
     let updates = merge_recording_events(updates, max);
     let mut labels = HashMap::new();
     let mut crops: Vec<BestCrop> = Vec::new();
+    let mut moved = false;
     for u in updates {
         match u {
             EventUpdate::Started { key, label, .. } => {
                 labels.insert(key, label);
             }
-            EventUpdate::Ended { key, crops: c, .. }
-                if labels.get(&key) == Some(&Label::Animal) =>
-            {
+            EventUpdate::Ended {
+                key,
+                crops: c,
+                moved: m,
+                ..
+            } if labels.get(&key) == Some(&Label::Animal) => {
                 crops.extend(c);
+                moved |= m;
             }
             _ => {}
         }
     }
     crops.sort_by(|a, b| b.quality.total_cmp(&a.quality));
     crops.truncate(max);
-    Ok((!crops.is_empty()).then_some(crops))
+    Ok((!crops.is_empty()).then_some((crops, moved)))
 }
 
-fn classify(species: &SpeciesHandle, crops: Vec<BestCrop>, detector_score: f32) -> SpeciesAnswer {
+pub(crate) fn classify(
+    species: &SpeciesHandle,
+    crops: Vec<BestCrop>,
+    detector_score: f32,
+) -> SpeciesAnswer {
     let (tx, rx) = tokio::sync::oneshot::channel();
     species.submit(SpeciesJob {
         crops: crops

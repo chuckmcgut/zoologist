@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use zoologist_core::Config;
+use zoologist_core::{Config, Label};
 use zoologist_video::mp4r::{read_mp4_index, read_samples};
 use zoologist_video::stream::Codec;
 use zoologist_vision::events::{EventKey, EventUpdate};
+use zoologist_vision::species::SpeciesAnswer;
 
 use crate::analysis::{AnalysisOptions, analyse_recording};
 use crate::pipeline::load_detector;
@@ -29,6 +30,7 @@ pub fn replay(
     camera_id: &str,
     clips: &[PathBuf],
     min_movement: Option<f32>,
+    with_species: bool,
 ) -> Result<()> {
     if let Some(m) = min_movement {
         config.tracking.min_movement = m;
@@ -50,6 +52,17 @@ pub fn replay(
     );
     let config = Arc::new(config);
     let (detector, _threads) = load_detector(&config)?;
+    // With species: animal events are named, and the still-and-unnamed rule is applied.
+    let species = if with_species {
+        match crate::pipeline::load_species(&config) {
+            Ok(Some(handle)) => Some(handle),
+            Ok(None) => bail!("the species classifier is turned off"),
+            Err(problem) => bail!("{problem}"),
+        }
+    } else {
+        None
+    };
+    let still_as_motion = config.species.still_unnamed_as_motion;
     let mut totals: HashMap<String, usize> = HashMap::new();
     for clip in clips {
         let name = clip.file_name().map_or_else(
@@ -98,6 +111,8 @@ pub fn replay(
                     key,
                     ended_at,
                     top_score,
+                    crops,
+                    moved,
                     ..
                 } => {
                     if let Some(&i) = open.get(&key) {
@@ -105,6 +120,24 @@ pub fn replay(
                         f.duration_s =
                             Some((ended_at - start).num_milliseconds() as f64 / 1000.0 - f.start_s);
                         f.score = f.score.max(top_score);
+                        if let Some(species) = &species
+                            && f.label == "animal"
+                            && !crops.is_empty()
+                        {
+                            let answer = crate::reclassify::classify(species, crops, f.score);
+                            f.label = match zoologist_vision::species::settle_still_animal(
+                                answer,
+                                moved,
+                                still_as_motion,
+                            ) {
+                                SpeciesAnswer::Species(g) => format!("animal ({})", g.common_name),
+                                SpeciesAnswer::NotAnimal(Label::Motion) if !moved => {
+                                    "motion (still, unnamed animal)".into()
+                                }
+                                SpeciesAnswer::NotAnimal(l) => format!("{l} (not an animal)"),
+                                SpeciesAnswer::Unknown => "animal (unnamed, moved)".into(),
+                            };
+                        }
                     }
                 }
                 EventUpdate::Updated { .. } => {}

@@ -264,6 +264,16 @@ pub enum SpeciesAnswer {
     Unknown,
 }
 
+/// Applies `species.still_unnamed_as_motion`: an "animal" that never moved and got no confident
+/// answer becomes motion. On the owner's Reolink camera, 60 of 60 such night-time "animals" were
+/// stumps, dark bushes and reflections; real animals move, or get named.
+pub fn settle_still_animal(answer: SpeciesAnswer, moved: bool, enabled: bool) -> SpeciesAnswer {
+    match answer {
+        SpeciesAnswer::Unknown if enabled && !moved => SpeciesAnswer::NotAnimal(Label::Motion),
+        other => other,
+    }
+}
+
 impl SpeciesRules {
     /// What the classifier says the event is, when it is certainly **not** an animal:
     ///

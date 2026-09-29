@@ -52,6 +52,8 @@ pub enum EventUpdate {
         median_score: f32,
         /// Best crops for species classification (empty for motion events).
         crops: Vec<BestCrop>,
+        /// Whether the object ever moved (always true for motion events).
+        moved: bool,
     },
 }
 
@@ -168,6 +170,7 @@ impl EventManager {
                             top_score: track.top_score(),
                             median_score: track.median_score(),
                             crops: track.crops.clone(),
+                            moved: track.travelled,
                         });
                         out.push(EventUpdate::Started {
                             key,
@@ -195,6 +198,7 @@ impl EventManager {
                             top_score: track.top_score(),
                             median_score: track.median_score(),
                             crops: track.crops.clone(),
+                            moved: track.travelled,
                         });
                     }
                 }
@@ -258,6 +262,7 @@ impl EventManager {
                         top_score: 0.0,
                         median_score: 0.0,
                         crops: Vec::new(),
+                        moved: true,
                     });
                     let id = self.next_motion_id;
                     self.next_motion_id += 1;
@@ -319,6 +324,7 @@ impl EventManager {
             top_score: 0.0,
             median_score: 0.0,
             crops: Vec::new(),
+            moved: true,
         })
     }
 }

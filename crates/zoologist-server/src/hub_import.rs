@@ -89,6 +89,7 @@ pub fn merge_recording_events(updates: Vec<EventUpdate>, max_crops: usize) -> Ve
         end: DateTime<Utc>,
         top: f32,
         crops: Vec<zoologist_vision::tracker::BestCrop>,
+        moved: bool,
     }
     let mut spans: HashMap<Label, Span> = HashMap::new();
     let mut starts: HashMap<EventKey, DateTime<Utc>> = HashMap::new();
@@ -106,6 +107,7 @@ pub fn merge_recording_events(updates: Vec<EventUpdate>, max_crops: usize) -> Ve
             ended_at,
             top_score,
             crops,
+            moved,
             ..
         } = u
             && let Some(label) = labels.get(key).filter(|l| **l != Label::Motion)
@@ -116,11 +118,13 @@ pub fn merge_recording_events(updates: Vec<EventUpdate>, max_crops: usize) -> Ve
                 end: *ended_at,
                 top: *top_score,
                 crops: Vec::new(),
+                moved: false,
             });
             span.start = span.start.min(start);
             span.end = span.end.max(*ended_at);
             span.top = span.top.max(*top_score);
             span.crops.extend(crops.iter().cloned());
+            span.moved |= *moved;
         }
     }
 
@@ -165,6 +169,7 @@ pub fn merge_recording_events(updates: Vec<EventUpdate>, max_crops: usize) -> Ve
                         top_score: span.top,
                         median_score,
                         crops,
+                        moved: span.moved,
                     }
                 }
                 (u, _) => u,
@@ -542,6 +547,7 @@ mod tests {
                 } else {
                     vec![crop]
                 },
+                moved: true,
             },
         ]
     }

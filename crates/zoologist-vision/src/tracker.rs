@@ -16,6 +16,8 @@ const CROP_SLOT_MS: i64 = 1000;
 const UPDATE_INTERVAL_MS: i64 = 1000;
 /// A box overlapping its previous position by at least this much has not moved.
 const STILL_IOU: f32 = 0.8;
+/// [`Track::travelled`]: the box shifted by this share of its diagonal (see [`has_moved`]).
+const TRAVEL: f32 = 0.2;
 /// Movement counts once the box has stayed away from where it started for this long.
 const MOVING_FOR_MS: i64 = 600;
 /// Edges this close to the picture's border are cut off by it.
@@ -54,6 +56,9 @@ pub struct Track {
     /// Where the object was first seen, and whether it has moved away from there since.
     origin: BBox,
     pub moved: bool,
+    /// Whether the box ever really moved away from `origin` ([`has_moved`]), whatever the label.
+    /// An "animal" that never moves and cannot be named is most likely a stump or a shadow.
+    pub travelled: bool,
     /// Since when the box has been away from `origin` without a break (see [`has_moved`]).
     moving_since: Option<DateTime<Utc>>,
     /// Where the object was when it last moved, and when it stopped there.
@@ -216,6 +221,7 @@ impl Tracker {
                 confirmed: false,
                 origin: det.bbox,
                 moved: false,
+                travelled: false,
                 moving_since: None,
                 anchor: det.bbox,
                 still_since: now,
@@ -375,6 +381,7 @@ fn observe(
             track.dormant = false;
             track.confirmed = false;
             track.moved = false;
+            track.travelled = false;
             track.moving_since = None;
             track.origin = track.anchor;
             track.first_seen = now;
@@ -385,6 +392,9 @@ fn observe(
         }
         track.anchor = det.bbox;
         track.still_since = now;
+    }
+    if !track.travelled {
+        track.travelled = has_moved(&track.origin, &det.bbox, TRAVEL);
     }
     track.bbox = det.bbox;
     track.last_detected = now;
@@ -693,6 +703,38 @@ mod tests {
         let b = |(x1, y1, x2, y2): (f32, f32, f32, f32)| BBox::new(x1, y1, x2, y2);
         for (origin, now) in pairs {
             assert!(!has_moved(&b(origin), &b(now), 0.2), "{origin:?} → {now:?}");
+        }
+    }
+
+    /// The Reolink camera's night-time "animals": the same box on a stump, again and again. A
+    /// fox walking across has travelled; the stump has not, whatever its box does.
+    #[test]
+    fn a_walking_animal_has_travelled_and_a_stump_has_not() {
+        let mut tr = tracker();
+        let stump = BBox::new(0.72, 0.28, 0.83, 0.6);
+        let frames: Vec<Vec<Detection>> = (0..30)
+            .map(|i| {
+                let fox = det(Label::Animal, 0.05 + i as f32 * 0.02, 0.6, 0.12, 0.9);
+                // The stump's box wobbles by a pixel or two.
+                let w = if i % 3 == 0 { 0.004 } else { 0.0 };
+                let stump = Detection {
+                    label: Label::Animal,
+                    raw_class: "animal".into(),
+                    score: 0.8,
+                    bbox: BBox::new(stump.x1 - w, stump.y1, stump.x2 + w, stump.y2),
+                };
+                vec![fox, stump]
+            })
+            .collect();
+        run(&mut tr, &frames);
+        let travelled: Vec<(f32, bool)> = tr
+            .tracks()
+            .iter()
+            .map(|t| (t.bbox.x1, t.travelled))
+            .collect();
+        assert_eq!(travelled.len(), 2, "{travelled:?}");
+        for (x, moved) in travelled {
+            assert_eq!(moved, x < 0.7, "fox travelled, stump did not: {x} {moved}");
         }
     }
 

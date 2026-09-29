@@ -13,7 +13,7 @@ use zoologist_core::{BBox, Frame, Label, local_date_hour};
 use zoologist_store::{ClipState, EventPatch, NewEvent, SegmentRecord};
 use zoologist_video::clips::{SegmentFile, build_clip, write_snapshot, write_thumb};
 use zoologist_vision::events::{EventKey, EventUpdate};
-use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesJob};
+use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesJob, settle_still_animal};
 
 use crate::analysis::CameraUpdate;
 use crate::app::{ApiEvent, AppState};
@@ -218,6 +218,7 @@ async fn handle(
             top_score,
             median_score,
             crops,
+            moved,
         } => {
             let Some(o) = open.remove(&key) else {
                 return Ok(());
@@ -279,8 +280,10 @@ async fn handle(
                     reply: tx,
                 });
                 let app = app.clone();
+                let still_as_motion = app.config.species.still_unnamed_as_motion;
                 jobs.spawn(async move {
-                    let patch = match rx.await {
+                    let answer = rx.await.map(|a| settle_still_animal(a, moved, still_as_motion));
+                    let patch = match answer {
                         Ok(SpeciesAnswer::Species(guess)) => {
                             tracing::info!(event = id, species = %guess.common_name, score = guess.score, "species");
                             EventPatch {
@@ -288,9 +291,10 @@ async fn handle(
                                 ..Default::default()
                             }
                         }
-                        // The detector called a person or a vehicle an animal.
+                        // The detector called a person or a vehicle an animal, or it never moved
+                        // and could not be named.
                         Ok(SpeciesAnswer::NotAnimal(label)) => {
-                            tracing::info!(event = id, label = %label, "not an animal: relabelled");
+                            tracing::info!(event = id, label = %label, moved, "not an animal: relabelled");
                             EventPatch {
                                 label: Some(label),
                                 ..Default::default()

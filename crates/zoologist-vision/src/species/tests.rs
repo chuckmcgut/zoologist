@@ -369,3 +369,31 @@ fn pool_votes_across_crops_and_drops_when_full() {
     );
     assert_eq!(handle.queue_depth(), 0);
 }
+
+#[test]
+fn a_still_animal_that_cannot_be_named_is_motion() {
+    let named = SpeciesAnswer::Species(SpeciesGuess {
+        scientific_name: "aves".into(),
+        common_name: "Bird".into(),
+        score: 0.8,
+        model_id: "speciesnet".into(),
+        candidates: Vec::new(),
+    });
+    // Never moved, no confident answer: a stump or a shadow.
+    assert_eq!(
+        settle_still_animal(SpeciesAnswer::Unknown, false, true),
+        SpeciesAnswer::NotAnimal(Label::Motion)
+    );
+    // It moved: kept as an unnamed animal.
+    assert_eq!(
+        settle_still_animal(SpeciesAnswer::Unknown, true, true),
+        SpeciesAnswer::Unknown
+    );
+    // Named: kept, moved or not (a bird sitting on a branch).
+    assert_eq!(settle_still_animal(named.clone(), false, true), named);
+    // The rule turned off.
+    assert_eq!(
+        settle_still_animal(SpeciesAnswer::Unknown, false, false),
+        SpeciesAnswer::Unknown
+    );
+}

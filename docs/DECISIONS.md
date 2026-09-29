@@ -289,3 +289,26 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   - The decoder's own allocator took memory in 128 MB blocks and hid which code was allocating. Glibc's
     allocator also makes `MALLOC_ARENA_MAX` (decision 24) take effect.
 
+## 26. 2026-09-28: An "animal" that never moves and cannot be named is motion
+
+- **Decision.** The tracker records whether an object ever really moved (the same edge-based test as for
+  vehicles, decision 22), for every label. When an animal event ends and the species classifier has no
+  confident answer, an animal that never moved is stored as **motion**
+  (`species.still_unnamed_as_motion`, on by default). Named animals are kept, moving or not (a bird on a
+  branch). The event is relabelled, not deleted. `reclassify` applies the same rule, and also treats a
+  clip in which a second look finds no animal as motion.
+- **Why.**
+  - The owner marked 15 of the Reolink camera's night-time "animals" as "nothing". They came from five
+    spots, each giving exactly the same box every time: a stump, a dark bush, reflections by a tarp.
+  - Re-analysing all 60 of that camera's "animal" clips found no animal in any of them. The classifier
+    had no confident answer for 23, called 4 "blank", and the detector did not find the others again.
+  - Replayed with the rule (`zoologist replay --species`), 35 of 37 animal events became motion.
+  - The two left, and two "person" events, are insects flying close to the infrared light. They move,
+    so this rule keeps them.
+  - A walking fox, and the two crows the owner confirmed, stayed animals ("Red fox"; "Bird").
+- **Limits.**
+  - A real animal that stands still for its whole visit and cannot be named is stored as motion. It is
+    still in the list, under Motion.
+  - Crows at 86×48 pixels on a 1536×432 sub stream can only be named "Bird": the classifier's own
+    candidates split between American crow and common raven.
+

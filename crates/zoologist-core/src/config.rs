@@ -195,6 +195,9 @@ pub struct SpeciesConfig {
     /// while the detector is fairly sure it is an animal. Below that, the result is rolled up
     /// to genus, family, … if the combined probability exceeds this. SpeciesNet uses 0.65.
     pub min_score: f32,
+    /// An "animal" that never moved and that the classifier cannot name is stored as motion:
+    /// such events are almost always a stump, a rock or a shadow the detector keeps seeing.
+    pub still_unnamed_as_motion: bool,
 }
 
 impl Default for SpeciesConfig {
@@ -211,6 +214,7 @@ impl Default for SpeciesConfig {
             workers: 1,
             max_crops_per_event: 3,
             min_score: 0.65,
+            still_unnamed_as_motion: true,
         }
     }
 }

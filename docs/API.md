@@ -187,7 +187,9 @@ curl -s -X POST -H 'Content-Type: application/json' -d '{"actual":"nothing","not
 Names an animal event's animal again from its clip (detector and species classifier, as for a live
 event, behind the live cameras; one at a time). Body `{"store": true}` stores the answer. Returns
 `{"outcome": "named", "species": {…}}`, `{"outcome": "not_animal", "label": "person"}` (stored as a
-relabel), `{"outcome": "unknown"}` or `{"outcome": "no_animal"}`. 400 for a non-animal event or one
+relabel), `{"outcome": "still_unnamed"}` (it never moved and could not be named, or a second look finds
+no animal: stored as motion, see `species.still_unnamed_as_motion`), `{"outcome": "unknown"}` (it
+moved but could not be named: left as it is) or `{"outcome": "no_animal"}` (only with that rule off). 400 for a non-animal event or one
 without a clip, 503 when the models are not loaded. Can take a minute. `zoologist reclassify` uses it
 when Zoologist is running.
 

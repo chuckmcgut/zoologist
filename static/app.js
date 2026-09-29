@@ -649,6 +649,7 @@ async function nameAgain() {
     const text = {
       named: () => `Named: ${capitalise(result.species.common_name)} ${fmt.percent(result.species.score)}`,
       not_animal: () => `Not an animal: a ${result.label}. Relabelled.`,
+      still_unnamed: () => "It never moved and could not be named: now motion.",
       unknown: () => "No confident answer: left as it was.",
       no_animal: () => "No animal found in the clip: left as it was.",
     }[result.outcome];

@@ -51,6 +51,8 @@ geofence = "/models/speciesnet_geofence.json"
 workers = 1
 max_crops_per_event = 3
 min_score = 0.65           # SpeciesNet's own threshold for naming a species or a group
+still_unnamed_as_motion = true   # an "animal" that never moved and cannot be named is stored as
+                                 # motion (a stump or a shadow the detector keeps seeing)
 # bioclip only:
 # species_list = "/config/my_species.txt"
 # text_embeddings = "/models/bioclip_text_embeddings.f32"

@@ -135,6 +135,9 @@ pub enum Command {
         /// Override `tracking.min_movement` (0 turns the rule off).
         #[arg(long)]
         min_movement: Option<f32>,
+        /// Also name the animals, and apply `species.still_unnamed_as_motion`.
+        #[arg(long)]
+        species: bool,
         clips: Vec<PathBuf>,
     },
     /// Delete events of the given cameras and labels from before a date, with their clips and

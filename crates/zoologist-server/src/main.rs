@@ -74,9 +74,10 @@ fn main() -> ExitCode {
             config,
             camera,
             min_movement,
+            species,
             clips,
         } => with_config(&config, |cfg| {
-            zoologist_server::replay::replay(cfg, &camera, &clips, min_movement)
+            zoologist_server::replay::replay(cfg, &camera, &clips, min_movement, species)
         }),
         Command::Prune {
             config,
