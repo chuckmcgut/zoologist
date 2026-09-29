@@ -33,6 +33,11 @@ const CERTAIN: f32 = 0.8;
 const DETECTOR_AGREES: f32 = 0.2;
 /// "blank" (an empty scene) above this means the detector found something that is not there.
 const NOTHING_THERE: f32 = 0.9;
+/// A *person* is overruled only when the classifier is surer still, and sees no human at all:
+/// on the owner's cameras real people scored up to 0.88 "blank" (a partial or blurred view), and
+/// insects in the infrared light 0.69 to 0.975.
+const PERSON_NOTHING_THERE: f32 = 0.95;
+const PERSON_NO_HUMAN: f32 = 0.02;
 /// Model id stored with each result.
 pub const MODEL_ID: &str = "speciesnet-4.0.3a";
 
@@ -274,6 +279,16 @@ pub fn settle_still_animal(answer: SpeciesAnswer, moved: bool, enabled: bool) ->
     }
 }
 
+/// The classifier's second opinion on a *person* event (`species.check_people`): only "nothing
+/// there" changes it, to motion. A "human" or "vehicle" answer, or an animal name, leaves the
+/// detector's person alone: people are what the detector is best at.
+pub fn settle_person(answer: SpeciesAnswer) -> Option<Label> {
+    match answer {
+        SpeciesAnswer::NotAnimal(Label::Motion) => Some(Label::Motion),
+        _ => None,
+    }
+}
+
 impl SpeciesRules {
     /// What the classifier says the event is, when it is certainly **not** an animal:
     ///
@@ -294,6 +309,13 @@ impl SpeciesRules {
                 _ => {}
             }
         }
+        tracing::debug!(
+            blank,
+            human,
+            vehicle,
+            "species classifier: not-an-animal classes"
+        );
+        let _ = vehicle;
         if human + vehicle > CERTAIN {
             return Some(if vehicle > human {
                 Label::Vehicle
@@ -302,6 +324,20 @@ impl SpeciesRules {
             });
         }
         (blank > NOTHING_THERE).then_some(Label::Motion)
+    }
+
+    /// For a person event: true when the classifier is sure nothing is there (see
+    /// [`PERSON_NOTHING_THERE`]).
+    pub fn person_not_there(&self, probs: &[f32]) -> bool {
+        let share = |name: &str| -> f32 {
+            probs
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.labels.get(*i).is_some_and(|l| l.common == name))
+                .map(|(_, p)| p)
+                .sum()
+        };
+        share("blank") >= PERSON_NOTHING_THERE && share("human") < PERSON_NO_HUMAN
     }
 
     /// The answer for averaged probabilities `probs` (one per label) of an event whose
@@ -507,6 +543,10 @@ pub trait SpeciesClassifier: Send + Sync + 'static {
     fn not_an_animal(&self, _probs: &[f32]) -> Option<Label> {
         None
     }
+    /// See [`SpeciesRules::person_not_there`].
+    fn person_not_there(&self, _probs: &[f32]) -> bool {
+        false
+    }
 }
 
 impl SpeciesClassifier for SpeciesModel {
@@ -519,6 +559,9 @@ impl SpeciesClassifier for SpeciesModel {
     fn not_an_animal(&self, probs: &[f32]) -> Option<Label> {
         self.rules.not_an_animal(probs)
     }
+    fn person_not_there(&self, probs: &[f32]) -> bool {
+        self.rules.person_not_there(probs)
+    }
 }
 
 /// One crop of an animal: the frame, the box and how good the view is (vote weight).
@@ -529,8 +572,20 @@ pub struct SpeciesCrop {
     pub quality: f32,
 }
 
-/// Work for the species pool: the best crops of one animal visit.
+/// What a species job is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Check {
+    /// Name an animal (or find that it is a person, a vehicle, or nothing).
+    #[default]
+    Animal,
+    /// A second opinion on a person: only "surely nothing there" is answered, as
+    /// `NotAnimal(Motion)`; anything else is `Unknown`.
+    Person,
+}
+
+/// Work for the species pool: the best crops of one visit.
 pub struct SpeciesJob {
+    pub check: Check,
     pub crops: Vec<SpeciesCrop>,
     /// The detector's best score for the animal.
     pub detector_score: f32,
@@ -611,11 +666,20 @@ pub fn spawn_species_pool(
                             SpeciesAnswer::Unknown
                         } else {
                             let probs = vote(&votes);
-                            match model.not_an_animal(&probs) {
-                                Some(label) => SpeciesAnswer::NotAnimal(label),
-                                None => model
-                                    .decide(&probs, job.detector_score)
-                                    .map_or(SpeciesAnswer::Unknown, SpeciesAnswer::Species),
+                            if job.check == Check::Person {
+                                model.not_an_animal(&probs); // logs the shares
+                                if model.person_not_there(&probs) {
+                                    SpeciesAnswer::NotAnimal(Label::Motion)
+                                } else {
+                                    SpeciesAnswer::Unknown
+                                }
+                            } else {
+                                match model.not_an_animal(&probs) {
+                                    Some(label) => SpeciesAnswer::NotAnimal(label),
+                                    None => model
+                                        .decide(&probs, job.detector_score)
+                                        .map_or(SpeciesAnswer::Unknown, SpeciesAnswer::Species),
+                                }
                             }
                         };
                         pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);

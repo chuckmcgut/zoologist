@@ -13,7 +13,9 @@ use zoologist_core::{BBox, Frame, Label, local_date_hour};
 use zoologist_store::{ClipState, EventPatch, NewEvent, SegmentRecord};
 use zoologist_video::clips::{SegmentFile, build_clip, write_snapshot, write_thumb};
 use zoologist_vision::events::{EventKey, EventUpdate};
-use zoologist_vision::species::{SpeciesAnswer, SpeciesCrop, SpeciesJob, settle_still_animal};
+use zoologist_vision::species::{
+    Check, SpeciesAnswer, SpeciesCrop, SpeciesJob, settle_person, settle_still_animal,
+};
 
 use crate::analysis::CameraUpdate;
 use crate::app::{ApiEvent, AppState};
@@ -262,12 +264,19 @@ async fn handle(
                     done,
                 ));
             }
-            if o.label == Label::Animal
+            let check = o.label == Label::Animal
+                || (o.label == Label::Person && app.config.species.check_people);
+            if check
                 && let Some(species) = &app.species
                 && !crops.is_empty()
             {
                 let (tx, rx) = oneshot::channel();
                 species.submit(SpeciesJob {
+                    check: if o.label == Label::Person {
+                        Check::Person
+                    } else {
+                        Check::Animal
+                    },
                     crops: crops
                         .into_iter()
                         .map(|c| SpeciesCrop {
@@ -281,8 +290,17 @@ async fn handle(
                 });
                 let app = app.clone();
                 let still_as_motion = app.config.species.still_unnamed_as_motion;
+                let person = o.label == Label::Person;
                 jobs.spawn(async move {
-                    let answer = rx.await.map(|a| settle_still_animal(a, moved, still_as_motion));
+                    let answer = if person {
+                        // A second opinion on a person: only "nothing there" changes it.
+                        match rx.await.ok().and_then(settle_person) {
+                            Some(label) => Ok(SpeciesAnswer::NotAnimal(label)),
+                            None => return,
+                        }
+                    } else {
+                        rx.await.map(|a| settle_still_animal(a, moved, still_as_motion))
+                    };
                     let patch = match answer {
                         Ok(SpeciesAnswer::Species(guess)) => {
                             tracing::info!(event = id, species = %guess.common_name, score = guess.score, "species");
@@ -294,7 +312,7 @@ async fn handle(
                         // The detector called a person or a vehicle an animal, or it never moved
                         // and could not be named.
                         Ok(SpeciesAnswer::NotAnimal(label)) => {
-                            tracing::info!(event = id, label = %label, moved, "not an animal: relabelled");
+                            tracing::info!(event = id, label = %label, moved, person, "relabelled");
                             EventPatch {
                                 label: Some(label),
                                 ..Default::default()

@@ -121,10 +121,30 @@ pub fn replay(
                             Some((ended_at - start).num_milliseconds() as f64 / 1000.0 - f.start_s);
                         f.score = f.score.max(top_score);
                         if let Some(species) = &species
+                            && f.label == "person"
+                            && config.species.check_people
+                            && !crops.is_empty()
+                        {
+                            let answer = crate::reclassify::classify(
+                                species,
+                                crops.clone(),
+                                f.score,
+                                zoologist_vision::species::Check::Person,
+                            );
+                            if zoologist_vision::species::settle_person(answer).is_some() {
+                                f.label = "motion (person: nothing there)".into();
+                            }
+                        }
+                        if let Some(species) = &species
                             && f.label == "animal"
                             && !crops.is_empty()
                         {
-                            let answer = crate::reclassify::classify(species, crops, f.score);
+                            let answer = crate::reclassify::classify(
+                                species,
+                                crops,
+                                f.score,
+                                zoologist_vision::species::Check::Animal,
+                            );
                             f.label = match zoologist_vision::species::settle_still_animal(
                                 answer,
                                 moved,

@@ -328,6 +328,7 @@ fn pool_votes_across_crops_and_drops_when_full() {
     // Two red crops outweigh one blue crop.
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle.submit(SpeciesJob {
+        check: Default::default(),
         crops: vec![
             crop([230, 20, 20], 1.0),
             crop([20, 20, 230], 1.0),
@@ -346,6 +347,7 @@ fn pool_votes_across_crops_and_drops_when_full() {
         .map(|_| {
             let (tx, rx) = tokio::sync::oneshot::channel();
             handle.submit(SpeciesJob {
+                check: Default::default(),
                 crops: vec![crop([230, 20, 20], 1.0)],
                 detector_score: 0.9,
                 reply: tx,
@@ -396,4 +398,19 @@ fn a_still_animal_that_cannot_be_named_is_motion() {
         settle_still_animal(SpeciesAnswer::Unknown, false, false),
         SpeciesAnswer::Unknown
     );
+}
+
+#[test]
+fn only_nothing_there_changes_a_person() {
+    assert_eq!(
+        settle_person(SpeciesAnswer::NotAnimal(Label::Motion)),
+        Some(Label::Motion),
+        "an insect in the infrared light"
+    );
+    assert_eq!(settle_person(SpeciesAnswer::NotAnimal(Label::Person)), None);
+    assert_eq!(
+        settle_person(SpeciesAnswer::NotAnimal(Label::Vehicle)),
+        None
+    );
+    assert_eq!(settle_person(SpeciesAnswer::Unknown), None);
 }

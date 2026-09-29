@@ -312,3 +312,21 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   - Crows at 86×48 pixels on a 1536×432 sub stream can only be named "Bird": the classifier's own
     candidates split between American crow and common raven.
 
+## 27. 2026-09-29: A strict second opinion on people; insects need a camera fix
+
+- **Decision.** Person events go to the species classifier too (`species.check_people`, on by default).
+  Only "surely nothing there" changes them: "blank" of at least 0.95 and "human" under 0.02 makes the
+  event motion. Any other answer leaves the person as it is.
+- **Why so strict.** All 7 "person" events of the Reolink camera on the server were false: 5 insects
+  flying through the infrared light, a gas cylinder and a jacket. But on 82 saved clips of real people
+  (Reolink and hybrid colour camera), the classifier's averaged answer was up to 0.88 "blank" for a real
+  person: a partial or blurred view, a person in infrared at night. So any threshold below 0.9 removes real
+  people, and 0.95 keeps a margin. With it:
+  - none of the 82 real people is touched;
+  - the clearest insect (0.975 blank, 0.002 human) becomes motion;
+  - a fainter insect (0.69 blank) and the gas cylinder (0.75 human) stay "person".
+  Sharpness and brightness did not separate insects from people either: every infrared picture is soft.
+- **Insects.** These are an infrared problem: a camera's own infrared lights attract insects and light
+  them up right in front of the lens. The reliable fixes are outside Zoologist: an external infrared
+  light away from the camera, or the camera's infrared off with some visible light.
+

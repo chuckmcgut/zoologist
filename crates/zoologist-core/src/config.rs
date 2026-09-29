@@ -198,6 +198,9 @@ pub struct SpeciesConfig {
     /// An "animal" that never moved and that the classifier cannot name is stored as motion:
     /// such events are almost always a stump, a rock or a shadow the detector keeps seeing.
     pub still_unnamed_as_motion: bool,
+    /// Person events are shown to the classifier too, as a second opinion: when it is sure
+    /// nothing is there (an insect in the infrared light, a gas cylinder), they become motion.
+    pub check_people: bool,
 }
 
 impl Default for SpeciesConfig {
@@ -215,6 +218,7 @@ impl Default for SpeciesConfig {
             max_crops_per_event: 3,
             min_score: 0.65,
             still_unnamed_as_motion: true,
+            check_people: true,
         }
     }
 }

@@ -126,7 +126,7 @@ pub fn reclassify_one(
         });
     };
     let answer = settle_still_animal(
-        classify(species, crops, e.top_score),
+        classify(species, crops, e.top_score, Default::default()),
         moved,
         still_as_motion,
     );
@@ -390,9 +390,11 @@ pub(crate) fn classify(
     species: &SpeciesHandle,
     crops: Vec<BestCrop>,
     detector_score: f32,
+    check: zoologist_vision::species::Check,
 ) -> SpeciesAnswer {
     let (tx, rx) = tokio::sync::oneshot::channel();
     species.submit(SpeciesJob {
+        check,
         crops: crops
             .into_iter()
             .map(|c| SpeciesCrop {
