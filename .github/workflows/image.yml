@@ -4,6 +4,7 @@ name: Image
 #   ghcr.io/<owner>/zoologist:latest      every push to main
 #   ghcr.io/<owner>/zoologist:sha-<short> every push to main
 #   ghcr.io/<owner>/zoologist:1.2.3       tags v1.2.3 (plus 1.2)
+# and the same tags with "-ffmpeg" (e.g. latest-ffmpeg) for the image that includes ffmpeg.
 # Pull it with `docker pull ghcr.io/<owner>/zoologist:latest`.
 
 on:
@@ -18,8 +19,17 @@ permissions:
 
 jobs:
   image:
-    name: build and push (linux/amd64)
+    name: build and push ${{ matrix.suffix || 'pure Rust' }} (linux/amd64)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # The pure-Rust image.
+          - target: runtime
+            suffix: ""
+          # With ffmpeg, for sharp species views from H.265 main recordings (battery cameras).
+          - target: runtime-ffmpeg
+            suffix: "-ffmpeg"
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -32,6 +42,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/zoologist
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
@@ -40,10 +52,10 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          target: runtime
+          target: ${{ matrix.target }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

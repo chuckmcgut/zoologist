@@ -201,6 +201,10 @@ pub struct SpeciesConfig {
     /// Person events are shown to the classifier too, as a second opinion: when it is sure
     /// nothing is there (an insect in the infrared light, a gas cylinder), they become motion.
     pub check_people: bool,
+    /// For live cameras reached through a Reolink Home Hub: while an animal is in view, take a
+    /// few full-resolution snapshots of the camera's main stream and name the animal from those
+    /// sharper views too.
+    pub snapshots: bool,
 }
 
 impl Default for SpeciesConfig {
@@ -219,6 +223,7 @@ impl Default for SpeciesConfig {
             min_score: 0.65,
             still_unnamed_as_motion: true,
             check_people: true,
+            snapshots: true,
         }
     }
 }

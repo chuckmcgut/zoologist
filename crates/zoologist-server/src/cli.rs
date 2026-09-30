@@ -115,6 +115,9 @@ pub enum Command {
         /// Also search this many days before today.
         #[arg(long, default_value_t = 0)]
         days: u32,
+        /// Only take a main- and a sub-stream snapshot of this channel and save them to `--out`.
+        #[arg(long)]
+        snap: Option<u8>,
     },
     /// List an ONVIF camera's streams: each profile's codec, resolution, frame rate, bitrate and
     /// RTSP address, and the resolutions its encoder allows. Asks for the password (hidden) unless
@@ -138,6 +141,10 @@ pub enum Command {
         /// Also name the animals, and apply `species.still_unnamed_as_motion`.
         #[arg(long)]
         species: bool,
+        /// With --species and one clip: the same recording's main stream (any codec ffmpeg
+        /// reads), to name animals from its sharper frames too, as the Hub importer does.
+        #[arg(long)]
+        main: Option<PathBuf>,
         clips: Vec<PathBuf>,
     },
     /// Delete events of the given cameras and labels from before a date, with their clips and

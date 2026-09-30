@@ -104,7 +104,9 @@ clips: 10–60 GB, depending on how busy your cameras are and how long you keep 
    The dashboard is on `http://<server>:8090`. `docker compose ps` shows "healthy" after about a
    minute, and `docker compose logs -f` shows what it is doing.
 
-The image is published as `ghcr.io/chuckmcgut/zoologist` for x86-64 each time `main` changes. If the
+The image is published as `ghcr.io/chuckmcgut/zoologist` for x86-64 each time `main` changes, in two
+variants: `:latest` is pure Rust, and `:latest-ffmpeg` adds ffmpeg so animals seen by Reolink battery
+cameras are also named from their sharp H.265 main recordings. The compose file uses the second. If the
 package is private, log in once with a GitHub token that has the `read:packages` scope:
 `docker login ghcr.io -u <github-user>`. To update later, run `docker compose pull && docker compose up -d`.
 

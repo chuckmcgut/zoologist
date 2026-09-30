@@ -29,12 +29,13 @@ use zoologist_vision::pool::DetectorHandle;
 
 use crate::analysis::{AnalysisOptions, CameraUpdate, analyse_recording};
 use crate::app::{ApiEvent, AppState};
+use crate::snapshots;
 use crate::writer::{HubClip, HubClips};
 
 /// Recordings that ended less recently than this may still be written by the Hub.
 const SETTLE: chrono::Duration = chrono::Duration::seconds(10);
 /// Battery clips start with the subject in view: the detector sees the whole frame this long.
-const TILE_SECONDS: i64 = 2;
+pub const TILE_SECONDS: i64 = 2;
 /// Wait this long after a failed poll before trying again (on top of `poll_seconds`).
 const ERROR_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -375,7 +376,7 @@ impl Importer {
             },
         );
 
-        let (started_events, first_frame) = self.analyse(cam, file, info, samples)?;
+        let (started_events, first_frame) = self.analyse(client, cam, file, info, samples)?;
         tracing::info!(
             camera = %cam.id,
             file = %file.name,
@@ -401,6 +402,7 @@ impl Importer {
     /// and the first decoded frame.
     fn analyse(
         &self,
+        client: &mut HubClient,
         cam: &CameraConfig,
         file: &HubFile,
         info: zoologist_video::stream::StreamInfo,
@@ -419,7 +421,8 @@ impl Importer {
             file.start,
             options,
         )?;
-        let updates = merge_recording_events(updates, self.config.species.max_crops_per_event);
+        let mut updates = merge_recording_events(updates, self.config.species.max_crops_per_event);
+        self.sharpen(client, cam, file, &mut updates);
         let started = updates
             .iter()
             .filter(|u| matches!(u, EventUpdate::Started { .. }))
@@ -434,6 +437,97 @@ impl Importer {
             }
         }
         Ok((started, first))
+    }
+
+    /// Adds sharp views of each animal from the recording's main stream (`species.snapshots`):
+    /// the main recording (often H.265, 5120×1440 on the owner's panorama camera where the sub
+    /// stream is 1536×432) is downloaded, ffmpeg takes the frames of the animal's best views, and
+    /// the detector finds the animal in them again. Nothing changes if ffmpeg or the main
+    /// recording is missing.
+    fn sharpen(
+        &self,
+        client: &mut HubClient,
+        cam: &CameraConfig,
+        file: &HubFile,
+        updates: &mut [EventUpdate],
+    ) {
+        if !self.config.species.snapshots || !self.config.species.enabled {
+            return;
+        }
+        let animals: Vec<EventKey> = updates
+            .iter()
+            .filter_map(|u| match u {
+                EventUpdate::Started { key, label, .. } if *label == Label::Animal => {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if animals.is_empty() {
+            return;
+        }
+        let Some(channel) = cam.channel else { return };
+        let tz = self.config.station.timezone;
+        let slack = chrono::Duration::seconds(2);
+        let main = match client.search(channel, "main", file.start - slack, file.end + slack, tz) {
+            Ok(files) => files
+                .into_iter()
+                .min_by_key(|f| (f.start - file.start).num_milliseconds().abs()),
+            Err(e) => {
+                tracing::warn!(camera = %cam.id, "no main recording to sharpen from: {e}");
+                None
+            }
+        };
+        let Some(main) = main else { return };
+        let tmp = self
+            .data_dir
+            .join("tmp")
+            .join(format!("{}-main.mp4", cam.id));
+        let _ = std::fs::create_dir_all(tmp.parent().unwrap_or(&self.data_dir));
+        if let Err(e) = client.download(&main, &tmp) {
+            tracing::warn!(camera = %cam.id, "cannot download the main recording: {e}");
+            return;
+        }
+        let ffmpeg = &self.config.video.ffmpeg_path;
+        let mut sharp = 0;
+        for u in updates.iter_mut() {
+            let EventUpdate::Ended { key, crops, .. } = u else {
+                continue;
+            };
+            if !animals.contains(key) {
+                continue;
+            }
+            let mut extra = Vec::new();
+            for crop in crops.iter() {
+                let offset =
+                    (crop.frame.captured_at - main.start).num_milliseconds() as f64 / 1000.0;
+                let Some(jpeg) = snapshots::ffmpeg_frame(ffmpeg, &tmp, offset) else {
+                    tracing::warn!(
+                        camera = %cam.id,
+                        "cannot read the main recording with {} (install ffmpeg, or use the \
+                         image with ffmpeg); animals are named from the sub stream",
+                        ffmpeg.display()
+                    );
+                    let _ = std::fs::remove_file(&tmp);
+                    return;
+                };
+                let located =
+                    snapshots::snap_from_jpeg(&jpeg, crop.bbox, &cam.id, crop.frame.captured_at)
+                        .and_then(|snap| snapshots::locate_blocking(&self.detector, snap));
+                if let Some(c) = located {
+                    extra.push(zoologist_vision::tracker::BestCrop {
+                        frame: c.frame,
+                        bbox: c.bbox,
+                        score: crop.score,
+                        quality: c.quality,
+                    });
+                }
+            }
+            sharp += extra.len();
+            crops.extend(extra);
+        }
+        let _ = std::fs::remove_file(&tmp);
+        tracing::info!(camera = %cam.id, file = %main.name, sharp, "sharp views from the main recording");
     }
 
     /// A `motion` event spanning the whole recording, for recordings in which nothing was

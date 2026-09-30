@@ -61,6 +61,7 @@ pub fn hub_test(
     download: bool,
     only_channel: Option<u8>,
     days: u32,
+    snap: Option<u8>,
 ) -> Result<()> {
     let hub = config
         .reolink_hubs
@@ -76,6 +77,29 @@ pub fn hub_test(
     let tz = config.station.timezone;
     let mut client = HubClient::new(&hub.url, &hub.user, &hub.password);
     client.record_to(out)?;
+    if let Some(channel) = snap {
+        std::fs::create_dir_all(out)?;
+        for (main, name) in [(true, "main"), (false, "sub")] {
+            let started = std::time::Instant::now();
+            match client.snap(channel, main) {
+                Ok(jpeg) => {
+                    let path = out.join(format!("snap-ch{channel}-{name}.jpg"));
+                    std::fs::write(&path, &jpeg)?;
+                    let size = image::load_from_memory(&jpeg)
+                        .map(|i| format!("{}×{}", i.width(), i.height()))
+                        .unwrap_or_else(|e| format!("not decodable: {e}"));
+                    println!(
+                        "snapshot channel {channel} {name}: {size}, {} kB in {} ms → {}",
+                        jpeg.len() / 1024,
+                        started.elapsed().as_millis(),
+                        path.display()
+                    );
+                }
+                Err(e) => println!("snapshot channel {channel} {name}: {e}"),
+            }
+        }
+        return Ok(());
+    }
 
     println!("Hub {hub_id} at {}", hub.url);
     client

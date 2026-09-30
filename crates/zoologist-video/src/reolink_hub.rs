@@ -601,6 +601,62 @@ impl HubClient {
         Ok(bytes)
     }
 
+    /// A JPEG snapshot of a channel from its main stream (`main`) or sub stream, taken now.
+    /// Reolink cameras give the snapshot at the stream's full resolution, so a live camera's
+    /// main-stream picture can be had without decoding its (often H.265) main stream.
+    pub fn snap(&mut self, channel: u8, main: bool) -> Result<Vec<u8>> {
+        let rs: String = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            format!("{nanos:x}")
+        };
+        let params = format!(
+            "cmd=Snap&channel={channel}&rs={rs}&snapType={}",
+            if main { "main" } else { "sub" }
+        );
+        let base = self.base.clone();
+        let session = self.session()?;
+        let url = match &session.cipher {
+            // As the Home Hub web app: the whole query, after the counter, is encrypted.
+            Some(cipher) => {
+                let cipher = cipher.clone();
+                let query = format!("{}&{params}", session.count());
+                format!(
+                    "{base}/cgi-bin/api.cgi?token={}&encrypt={}",
+                    session.token,
+                    cipher.encrypt(&query)
+                )
+            }
+            None => format!("{base}/cgi-bin/api.cgi?{params}&token={}", session.token),
+        };
+        let mut resp = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|e| HubError::Http(scrub(&e.to_string())))?;
+        let is_jpeg = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|t| t.contains("image"));
+        let mut bytes = Vec::new();
+        resp.body_mut()
+            .as_reader()
+            .take(20 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map_err(|e| HubError::Http(e.to_string()))?;
+        if !is_jpeg || !bytes.starts_with(&[0xff, 0xd8]) {
+            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(300)]).to_string();
+            return Err(HubError::Protocol {
+                cmd: "Snap".into(),
+                why: format!("no JPEG in the answer: {}", scrub(&text)),
+            });
+        }
+        Ok(bytes)
+    }
+
     /// Ends the session (best effort; sessions also expire by themselves).
     pub fn logout(&mut self) {
         if self.session.is_some() {

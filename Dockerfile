@@ -39,7 +39,8 @@ ENTRYPOINT ["/usr/local/bin/zoologist"]
 CMD ["run", "--config", "/config/zoologist.toml"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD ["/usr/local/bin/zoologist", "healthcheck"]
 
-# Only if the pure-Rust decoder cannot handle a camera (plan Step 0.4): adds ffmpeg.
+# With ffmpeg: for sharp species views from the H.265 main recordings of Reolink battery
+# cameras (species.snapshots), or if the pure-Rust decoder cannot handle a camera.
 FROM debian:bookworm-slim AS runtime-ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*

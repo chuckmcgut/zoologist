@@ -31,6 +31,7 @@ pub fn replay(
     clips: &[PathBuf],
     min_movement: Option<f32>,
     with_species: bool,
+    main: Option<PathBuf>,
 ) -> Result<()> {
     if let Some(m) = min_movement {
         config.tracking.min_movement = m;
@@ -82,9 +83,13 @@ pub fn replay(
         }
         let samples = read_samples(clip, &entries)?;
         let start = Utc::now();
+        // Battery-camera recordings are analysed as the Hub importer does: the whole picture
+        // for the first seconds, since they start with the subject already in view.
+        let hub_clip = camera.kind == zoologist_core::config::CameraKind::HubClips;
         let options = AnalysisOptions {
             background: false,
-            tiles_until: None,
+            tiles_until: hub_clip
+                .then(|| start + chrono::Duration::seconds(crate::hub_import::TILE_SECONDS)),
         };
         let (updates, _) =
             analyse_recording(&config, &camera, &detector, info, samples, start, options)?;
@@ -134,6 +139,54 @@ pub fn replay(
                             if zoologist_vision::species::settle_person(answer).is_some() {
                                 f.label = "motion (person: nothing there)".into();
                             }
+                        }
+                        let mut crops = crops;
+                        if let (Some(main), true) = (&main, f.label == "animal") {
+                            // As the Hub importer: sharp views from the main recording.
+                            let t0 = start;
+                            let mut extra = Vec::new();
+                            for crop in &crops {
+                                let offset = (crop.frame.captured_at - t0).num_milliseconds()
+                                    as f64
+                                    / 1000.0;
+                                let located = crate::snapshots::ffmpeg_frame(
+                                    &config.video.ffmpeg_path,
+                                    main,
+                                    offset,
+                                )
+                                .and_then(|jpeg| {
+                                    crate::snapshots::snap_from_jpeg(
+                                        &jpeg,
+                                        crop.bbox,
+                                        "replay",
+                                        crop.frame.captured_at,
+                                    )
+                                })
+                                .and_then(|snap| {
+                                    crate::snapshots::locate_blocking(&detector, snap)
+                                });
+                                if let Some(c) = located {
+                                    extra.push(zoologist_vision::tracker::BestCrop {
+                                        frame: c.frame,
+                                        bbox: c.bbox,
+                                        score: crop.score,
+                                        quality: c.quality,
+                                    });
+                                }
+                            }
+                            if let Some(species) = &species {
+                                let sub_only = crate::reclassify::classify(
+                                    species,
+                                    crops.clone(),
+                                    f.score,
+                                    zoologist_vision::species::Check::Animal,
+                                );
+                                println!(
+                                    "  sub stream only: {sub_only:?}\n  sharp views found: {}",
+                                    extra.len()
+                                );
+                            }
+                            crops.extend(extra);
                         }
                         if let Some(species) = &species
                             && f.label == "animal"

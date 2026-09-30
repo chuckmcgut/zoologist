@@ -13,7 +13,10 @@
 
 services:
   zoologist:
-    image: ghcr.io/chuckmcgut/zoologist:latest   # or a fixed version, e.g. :sha-5c3df7e
+    # ":latest" is pure Rust. ":latest-ffmpeg" adds ffmpeg, so animals from Reolink battery
+    # cameras are named from their sharp (H.265) main recordings too. Or a fixed version, e.g.
+    # ":0.1.5-ffmpeg".
+    image: ghcr.io/chuckmcgut/zoologist:latest-ffmpeg
     # build:
     #   context: .
     #   target: runtime            # or runtime-ffmpeg if [video] decoder = "ffmpeg"

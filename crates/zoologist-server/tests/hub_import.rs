@@ -30,6 +30,8 @@ struct FakeHub {
     clip: Arc<Vec<u8>>,
     start: DateTime<Utc>,
     downloads: Arc<AtomicUsize>,
+    /// The file names asked for, in order.
+    downloaded: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 fn hub_time(t: DateTime<Utc>) -> serde_json::Value {
@@ -59,9 +61,13 @@ async fn api(
         }
         "Search" => {
             let req: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            let files = if req[0]["param"]["Search"]["channel"] == 3 {
+            let search = &req[0]["param"]["Search"];
+            // The main recording (here the same fox clip) is what sharp views come from.
+            let main = search["streamType"] == "main";
+            let files = if search["channel"] == 3 {
                 vec![json!({
-                    "name": "1-0-fox", "type": "sub", "size": 1048576,
+                    "name": if main { "0-0-fox" } else { "1-0-fox" },
+                    "type": if main { "main" } else { "sub" }, "size": 1048576,
                     "StartTime": hub_time(hub.start),
                     "EndTime": hub_time(hub.start + chrono::Duration::seconds(10)),
                 })]
@@ -72,6 +78,10 @@ async fn api(
         }
         "Download" | "download" => {
             hub.downloads.fetch_add(1, Ordering::SeqCst);
+            hub.downloaded
+                .lock()
+                .unwrap()
+                .push(q.get("source").cloned().unwrap_or_default());
             (
                 [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
                 hub.clip.as_ref().clone(),
@@ -140,6 +150,7 @@ async fn battery_camera_recording_becomes_a_red_fox_event() {
         clip: Arc::new(std::fs::read(&clip).unwrap()),
         start,
         downloads: Arc::default(),
+        downloaded: Arc::default(),
     };
     let url = start_fake(fake.clone());
     let m = models.display();
@@ -229,11 +240,18 @@ channel = 3
     let clip_path = data.path().join(fox.clip_path.as_deref().unwrap());
     assert_eq!(std::fs::read(&clip_path).unwrap(), fake.clip.as_ref()[..]);
     assert!(fox.snapshot_path.is_some());
+    // The recording once, and its main recording once for sharp views of the fox.
+    let downloaded = fake.downloaded.lock().unwrap().clone();
     assert_eq!(
-        fake.downloads.load(Ordering::SeqCst),
+        downloaded.iter().filter(|n| *n == "1-0-fox").count(),
         1,
-        "imported exactly once"
+        "imported exactly once: {downloaded:?}"
     );
+    assert!(
+        downloaded.iter().filter(|n| *n == "0-0-fox").count() <= 1,
+        "{downloaded:?}"
+    );
+    assert_eq!(fake.downloads.load(Ordering::SeqCst), downloaded.len());
     assert_eq!(health.imported, 1, "{health:?}");
     assert!(
         store.hub_import_seen("hub", "1-0-fox").unwrap(),

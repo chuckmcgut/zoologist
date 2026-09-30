@@ -60,8 +60,17 @@ fn main() -> ExitCode {
             no_download,
             channel,
             days,
+            snap,
         } => with_config(&config, |cfg| {
-            zoologist_server::hub_test::hub_test(&cfg, &hub, &out, !no_download, channel, days)
+            zoologist_server::hub_test::hub_test(
+                &cfg,
+                &hub,
+                &out,
+                !no_download,
+                channel,
+                days,
+                snap,
+            )
         }),
         Command::Onvif { url, user } => match tools::onvif(&url, &user) {
             Ok(()) => ExitCode::SUCCESS,
@@ -75,9 +84,10 @@ fn main() -> ExitCode {
             camera,
             min_movement,
             species,
+            main,
             clips,
         } => with_config(&config, |cfg| {
-            zoologist_server::replay::replay(cfg, &camera, &clips, min_movement, species)
+            zoologist_server::replay::replay(cfg, &camera, &clips, min_movement, species, main)
         }),
         Command::Prune {
             config,

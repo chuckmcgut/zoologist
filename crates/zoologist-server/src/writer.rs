@@ -19,6 +19,7 @@ use zoologist_vision::species::{
 
 use crate::analysis::CameraUpdate;
 use crate::app::{ApiEvent, AppState};
+use crate::snapshots::{self, Snap, Snapshotter};
 
 /// Pictures of a live event are refreshed at most this often.
 const PICTURE_INTERVAL: Duration = Duration::from_secs(2);
@@ -65,12 +66,53 @@ impl HubClips {
     }
 }
 
+/// What every update of the writer needs besides the event itself.
+struct Shared {
+    clip_slots: Arc<Semaphore>,
+    snapshotter: Snapshotter,
+    recorders: RecorderDone,
+    hub_clips: HubClips,
+}
+
 struct Open {
     id: u64,
     label: Label,
     started_at: DateTime<Utc>,
     last_picture: Instant,
     top_score: f32,
+    /// Full-resolution snapshots being taken while an animal is in view.
+    snaps: Vec<tokio::task::JoinHandle<Option<Snap>>>,
+    last_snap: Option<Instant>,
+}
+
+/// Starts a snapshot of an animal on a live Hub camera, if allowed now.
+fn maybe_snap(
+    app: &AppState,
+    snapshotter: &Snapshotter,
+    camera_id: &str,
+    o: &mut Open,
+    bbox: BBox,
+) {
+    if o.label != Label::Animal
+        || !app.config.species.snapshots
+        || app.species.is_none()
+        || o.snaps.len() >= snapshots::MAX_PER_EVENT
+        || o.last_snap
+            .is_some_and(|t| t.elapsed() < snapshots::INTERVAL)
+    {
+        return;
+    }
+    let Some(camera) = app.config.cameras.iter().find(|c| c.id == camera_id) else {
+        return;
+    };
+    if snapshots::snapshot_channel(camera).is_none() {
+        return;
+    }
+    o.last_snap = Some(Instant::now());
+    let (app, snapshotter, camera) = (app.clone(), snapshotter.clone(), camera.clone());
+    o.snaps.push(tokio::spawn(async move {
+        snapshotter.take(&app, &camera, bbox).await
+    }));
 }
 
 /// Consumes event updates until the channel closes, then waits for pending clip and species
@@ -83,19 +125,14 @@ pub async fn run_writer(
 ) {
     let mut open: HashMap<EventKey, Open> = HashMap::new();
     let mut jobs = JoinSet::new();
-    let clip_slots = Arc::new(Semaphore::new(CLIP_JOBS));
+    let shared = Shared {
+        clip_slots: Arc::new(Semaphore::new(CLIP_JOBS)),
+        snapshotter: Snapshotter::default(),
+        recorders,
+        hub_clips,
+    };
     while let Some((camera_id, update)) = updates.recv().await {
-        let result = handle(
-            &app,
-            &mut open,
-            &mut jobs,
-            &clip_slots,
-            &recorders,
-            &hub_clips,
-            &camera_id,
-            update,
-        )
-        .await;
+        let result = handle(&app, &mut open, &mut jobs, &shared, &camera_id, update).await;
         if let Err(e) = result {
             tracing::warn!(camera = %camera_id, "could not store event: {e:#}");
         }
@@ -137,12 +174,16 @@ async fn handle(
     app: &AppState,
     open: &mut HashMap<EventKey, Open>,
     jobs: &mut JoinSet<()>,
-    clip_slots: &Arc<Semaphore>,
-    recorders: &RecorderDone,
-    hub_clips: &HubClips,
+    shared: &Shared,
     camera_id: &str,
     update: EventUpdate,
 ) -> anyhow::Result<()> {
+    let Shared {
+        clip_slots,
+        snapshotter,
+        recorders,
+        hub_clips,
+    } = shared;
     match update {
         EventUpdate::Started {
             key,
@@ -176,16 +217,19 @@ async fn handle(
                 tracing::info!(camera = %camera_id, event = id, label = %label, "event started");
                 app.publish(ApiEvent::Started(record));
             }
-            open.insert(
-                key,
-                Open {
-                    id,
-                    label,
-                    started_at,
-                    last_picture: Instant::now(),
-                    top_score: score,
-                },
-            );
+            let mut o = Open {
+                id,
+                label,
+                started_at,
+                last_picture: Instant::now(),
+                top_score: score,
+                snaps: Vec::new(),
+                last_snap: None,
+            };
+            if let Some(bbox) = bbox {
+                maybe_snap(app, snapshotter, camera_id, &mut o, bbox);
+            }
+            open.insert(key, o);
         }
         EventUpdate::Updated {
             key,
@@ -199,6 +243,10 @@ async fn handle(
             if top_score > o.top_score {
                 o.top_score = top_score;
                 patch.top_score = Some(top_score);
+            }
+            if let Some(best) = &best {
+                // A better view: the animal is well in view now.
+                maybe_snap(app, snapshotter, camera_id, o, best.bbox);
             }
             if let Some(best) = best
                 && o.last_picture.elapsed() >= PICTURE_INTERVAL
@@ -222,7 +270,7 @@ async fn handle(
             crops,
             moved,
         } => {
-            let Some(o) = open.remove(&key) else {
+            let Some(mut o) = open.remove(&key) else {
                 return Ok(());
             };
             let camera = app.config.cameras.iter().find(|c| c.id == camera_id);
@@ -270,28 +318,47 @@ async fn handle(
                 && let Some(species) = &app.species
                 && !crops.is_empty()
             {
-                let (tx, rx) = oneshot::channel();
-                species.submit(SpeciesJob {
-                    check: if o.label == Label::Person {
-                        Check::Person
-                    } else {
-                        Check::Animal
-                    },
-                    crops: crops
-                        .into_iter()
-                        .map(|c| SpeciesCrop {
-                            frame: c.frame,
-                            bbox: c.bbox,
-                            quality: c.quality,
-                        })
-                        .collect(),
-                    detector_score: top_score,
-                    reply: tx,
-                });
+                let check = if o.label == Label::Person {
+                    Check::Person
+                } else {
+                    Check::Animal
+                };
+                let mut crops: Vec<SpeciesCrop> = crops
+                    .into_iter()
+                    .map(|c| SpeciesCrop {
+                        frame: c.frame,
+                        bbox: c.bbox,
+                        quality: c.quality,
+                    })
+                    .collect();
+                let snaps = std::mem::take(&mut o.snaps);
+                let species = species.clone();
+                let detector = app.detector.clone();
                 let app = app.clone();
                 let still_as_motion = app.config.species.still_unnamed_as_motion;
                 let person = o.label == Label::Person;
                 jobs.spawn(async move {
+                    // Sharp views from full-resolution snapshots, where the detector finds the
+                    // animal again.
+                    let mut sharp = 0;
+                    for snap in snaps {
+                        if let (Ok(Some(snap)), Some(detector)) = (snap.await, &detector)
+                            && let Some(crop) = snapshots::locate(detector, snap).await
+                        {
+                            crops.push(crop);
+                            sharp += 1;
+                        }
+                    }
+                    if sharp > 0 {
+                        tracing::info!(event = id, sharp, "sharp views from snapshots");
+                    }
+                    let (tx, rx) = oneshot::channel();
+                    species.submit(SpeciesJob {
+                        check,
+                        crops,
+                        detector_score: top_score,
+                        reply: tx,
+                    });
                     let answer = if person {
                         // A second opinion on a person: only "nothing there" changes it.
                         match rx.await.ok().and_then(settle_person) {

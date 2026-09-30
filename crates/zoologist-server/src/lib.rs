@@ -16,5 +16,6 @@ pub mod pipeline;
 pub mod prune;
 pub mod reclassify;
 pub mod replay;
+pub mod snapshots;
 pub mod tools;
 pub mod writer;

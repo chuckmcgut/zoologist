@@ -330,3 +330,25 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   them up right in front of the lens. The reliable fixes are outside Zoologist: an external infrared
   light away from the camera, or the camera's infrared off with some visible light.
 
+## 28. 2026-09-30: Sharp views of animals from the main streams
+
+- **Decision.** `species.snapshots` (on by default). The species classifier also gets views of each animal
+  from the camera's main stream, which is H.265 and several times sharper:
+  - **Live cameras behind a Reolink Home Hub** (the Reolink camera here). While an animal is in view, up to
+    3 snapshots (`cmd=Snap`, `snapType=main`) are taken, 4 s apart, when the event starts and when its best
+    view improves. These are 7680×2160 JPEGs, where the sub stream is 1536×432, and take about 2 s each.
+    The area 2.5 × the animal's box is cut out, the detector finds the animal in it again, and that crop is
+    voted with twice the weight. This is pure Rust: the Hub decodes its own stream.
+  - **Battery cameras** (Hub recordings). When a recording has an animal, the main recording (H.265,
+    5120×1440 or 3840×2160) is downloaded. ffmpeg takes the frames of the animal's best views, which are
+    handled the same way. This needs ffmpeg, so there is a second image, `…-ffmpeg`. Without ffmpeg,
+    animals are named from the sub stream as before.
+- **Why.** Species names stayed coarse: a crow 86×48 px was "Bird", a deer "Cervidae family" (white-tailed
+  deer 55 %). The resolution changes the owner made in the Reolink app only apply to the H.265 main
+  streams; the H.264 sub streams keep a fixed size. The main snapshot shows exactly the sub stream's view
+  (correlation 0.94, no offset), and text on a box 20 m away becomes readable. On the owner's deer
+  recording, two sharp views from the main recording turned "Cervidae family" into "White-tailed deer".
+- **Limits.** Battery cameras are never asked for snapshots, because that would wake them. Snapshots of a
+  live camera take about 2 s, so a fast animal may have moved; the detector looks for it in an area 2.5 ×
+  its box, and a snapshot without the animal is ignored.
+
