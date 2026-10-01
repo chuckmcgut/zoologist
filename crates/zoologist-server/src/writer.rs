@@ -10,7 +10,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
 use zoologist_core::config::CameraKind;
 use zoologist_core::{BBox, Frame, Label, local_date_hour};
-use zoologist_store::{ClipState, EventPatch, NewEvent, SegmentRecord};
+use zoologist_store::{ClipState, EventPatch, EventQuery, NewEvent, SegmentRecord};
 use zoologist_video::clips::{SegmentFile, build_clip, write_snapshot, write_thumb};
 use zoologist_vision::events::{EventKey, EventUpdate};
 use zoologist_vision::species::{
@@ -64,6 +64,35 @@ impl HubClips {
             .find(|c| c.start - slack <= t && t <= c.end + slack)
             .cloned()
     }
+}
+
+/// Boxes overlapping by this much are the same spot.
+const SAME_SPOT_IOU: f32 = 0.5;
+
+/// True when event `id`'s box is where someone marked another event of the same camera as
+/// "nothing there" (the "Wrong" button).
+async fn marked_nothing_spot(app: &AppState, camera_id: &str, id: u64) -> bool {
+    let camera = camera_id.to_string();
+    let found = app
+        .store
+        .call(move |s| {
+            let Some(bbox) = s.get_event(id)?.and_then(|e| e.best_bbox) else {
+                return Ok(false);
+            };
+            let marks = s.list_events(&EventQuery {
+                camera: Some(camera),
+                marked_wrong: true,
+                limit: zoologist_store::MAX_PAGE,
+                ..Default::default()
+            })?;
+            Ok(marks.items.iter().any(|e| {
+                e.id != id
+                    && e.feedback.as_ref().is_some_and(|f| f.actual.is_none())
+                    && e.best_bbox.is_some_and(|b| b.iou(&bbox) >= SAME_SPOT_IOU)
+            }))
+        })
+        .await;
+    found.unwrap_or(false)
 }
 
 /// What every update of the writer needs besides the event itself.
@@ -312,6 +341,22 @@ async fn handle(
                     done,
                 ));
             }
+            // A spot someone marked "nothing there": the chair or the stump again.
+            if matches!(o.label, Label::Person | Label::Animal)
+                && !moved
+                && app.config.species.learn_from_marks
+                && marked_nothing_spot(app, camera_id, id).await
+            {
+                tracing::info!(event = id, label = %o.label, "still, in a spot marked as nothing: motion");
+                let patch = EventPatch {
+                    label: Some(Label::Motion),
+                    ..Default::default()
+                };
+                if let Some(record) = app.store.call(move |s| s.update_event(id, &patch)).await? {
+                    app.publish(ApiEvent::Updated(record));
+                }
+                return Ok(());
+            }
             let check = o.label == Label::Animal
                 || (o.label == Label::Person && app.config.species.check_people);
             if check
@@ -456,5 +501,74 @@ async fn clip_job(
     };
     if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
         app.publish(ApiEvent::Updated(record));
+    }
+}
+
+#[cfg(test)]
+mod spot_tests {
+    use chrono::Utc;
+    use zoologist_core::Config;
+    use zoologist_store::{Feedback, Store};
+
+    use super::*;
+
+    fn event(app: &AppState, camera: &str, bbox: BBox) -> u64 {
+        let new = NewEvent {
+            camera_id: camera.into(),
+            label: Label::Person,
+            raw_class: None,
+            started_at: Utc::now(),
+            top_score: 0.7,
+            median_score: 0.7,
+            best_bbox: Some(bbox),
+            snapshot_path: None,
+            thumb_path: None,
+        };
+        app.store.insert_event(&new).unwrap().id
+    }
+
+    fn mark(app: &AppState, id: u64, actual: Option<Label>) {
+        let patch = EventPatch {
+            feedback: Some(Some(Feedback {
+                actual,
+                species: None,
+                note: Some("upside-down camp chair".into()),
+                at: Utc::now(),
+            })),
+            ..Default::default()
+        };
+        app.store.update_event(id, &patch).unwrap();
+    }
+
+    /// The owner's camp chair: marked "nothing" once, then found again in the same box.
+    #[tokio::test]
+    async fn a_spot_marked_nothing_is_recognised_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::default();
+        let store = Store::open(&dir.path().join("db.redb"), config.station.timezone).unwrap();
+        let app = AppState::without_pipeline(config, store);
+        let chair = BBox::new(0.638, 0.556, 0.668, 0.720);
+        let first = event(&app, "container", chair);
+        let again = event(&app, "container", BBox::new(0.637, 0.564, 0.668, 0.759));
+        let elsewhere = event(&app, "container", BBox::new(0.2, 0.5, 0.25, 0.7));
+        let other_camera = event(&app, "nc200", chair);
+        assert!(
+            !marked_nothing_spot(&app, "container", again).await,
+            "nothing marked yet"
+        );
+        mark(&app, first, None);
+        assert!(marked_nothing_spot(&app, "container", again).await);
+        assert!(!marked_nothing_spot(&app, "container", elsewhere).await);
+        assert!(
+            !marked_nothing_spot(&app, "nc200", other_camera).await,
+            "other camera"
+        );
+        assert!(
+            !marked_nothing_spot(&app, "container", first).await,
+            "not its own mark"
+        );
+        // "It was a person" is not a spot to ignore.
+        mark(&app, first, Some(Label::Person));
+        assert!(!marked_nothing_spot(&app, "container", again).await);
     }
 }

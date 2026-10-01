@@ -57,6 +57,8 @@ check_people = true        # a "person" the classifier finds nothing in (an inse
                            # infrared light, a gas cylinder) is stored as motion
 snapshots = true           # live cameras behind a Reolink Home Hub: name animals from full-
                            # resolution snapshots of the main stream too (sharper than the sub)
+learn_from_marks = true    # a still person or animal where you marked "nothing" before (a
+                           # chair, a stump) is stored as motion
 # bioclip only:
 # species_list = "/config/my_species.txt"
 # text_embeddings = "/models/bioclip_text_embeddings.f32"

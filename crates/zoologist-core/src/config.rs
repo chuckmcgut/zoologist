@@ -205,6 +205,9 @@ pub struct SpeciesConfig {
     /// few full-resolution snapshots of the camera's main stream and name the animal from those
     /// sharper views too.
     pub snapshots: bool,
+    /// Learn from the "Wrong" button: a person or animal that never moves, in a spot of the same
+    /// camera that someone marked as "nothing there", is stored as motion.
+    pub learn_from_marks: bool,
 }
 
 impl Default for SpeciesConfig {
@@ -224,6 +227,7 @@ impl Default for SpeciesConfig {
             still_unnamed_as_motion: true,
             check_people: true,
             snapshots: true,
+            learn_from_marks: true,
         }
     }
 }

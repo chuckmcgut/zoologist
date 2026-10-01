@@ -352,3 +352,18 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   live camera take about 2 s, so a fast animal may have moved; the detector looks for it in an area 2.5 ×
   its box, and a snapshot without the animal is ignored.
 
+## 29. 2026-10-01: Learn from the "Wrong" button: spots marked "nothing"
+
+- **Decision.** `species.learn_from_marks` (on by default). When a person or animal event ends and the
+  object never moved, its box is compared with the events of the same camera that someone marked as
+  "nothing there". If the boxes overlap by half (IoU at least 0.5), the event is stored as motion and not
+  checked further.
+- **Why.** The same objects kept coming back as the same "person" or "animal", in exactly the same box:
+  an upside-down blue camp chair (three times), a gas cylinder, a green electrical box. The owner marked
+  them, but the marks taught Zoologist nothing. Of the Reolink camera's 67 remaining person and animal
+  events, 41 overlap another "nothing" mark. 22 of those were marked themselves, and the other 19 are
+  the night-time stump and dark-patch "animals" already known to be false.
+- **Safety.** Only objects that never moved are affected: a person who walks to the chair's spot moved on
+  the way. Only "nothing there" marks count; a mark saying "it was a person" does not. Marks are
+  per camera.
+
