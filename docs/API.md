@@ -254,12 +254,12 @@ curl -s "$Z/stats/hourly?date=2026-09-19"
 Server-Sent Events. Each message looks like this:
 
 ```
-event: started            (or updated, ended)
+event: started            (or updated, ended, removed)
 id: 17                    (the event id)
 data: {…Event JSON…}
 ```
 
-An event is `started` once, then `updated` whenever something changes: a better snapshot, a higher score, the clip becoming ready, or the species arriving. It is `ended` when the event finishes; updates can still follow (clip, species). A comment is sent every 15 s to keep proxies from closing the connection.
+An event is `started` once, then `updated` whenever something changes: a better snapshot, a higher score, the clip becoming ready, or the species arriving. It is `ended` when the event finishes; updates can still follow (clip, species). `removed` means the event no longer exists: a "person" or "animal" that turned out to be nothing, on a camera whose `labels` leave out motion. A comment is sent every 15 s to keep proxies from closing the connection.
 
 When a client reconnects with `Last-Event-ID: <id>` (browsers do this by themselves), it first gets every event with a higher id from the database, as `started` or `ended`. Then live messages follow.
 
@@ -272,4 +272,5 @@ const es = new EventSource('/api/v1/stream');
 es.addEventListener('started', e => addTile(JSON.parse(e.data)));
 es.addEventListener('updated', e => replaceTile(JSON.parse(e.data)));
 es.addEventListener('ended', e => replaceTile(JSON.parse(e.data)));
+es.addEventListener('removed', e => removeTile(Number(e.lastEventId)));
 ```

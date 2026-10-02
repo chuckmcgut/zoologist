@@ -32,6 +32,7 @@ fn live_event(msg: &ApiEvent) -> Event {
         ApiEvent::Started(_) => "started",
         ApiEvent::Updated(_) => "updated",
         ApiEvent::Ended(_) => "ended",
+        ApiEvent::Removed(_) => "removed",
     };
     sse(kind, msg.record())
 }

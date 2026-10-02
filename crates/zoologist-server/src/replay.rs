@@ -48,7 +48,7 @@ pub fn replay(
     println!(
         "camera {camera_id}: tracking.min_movement = {} for {:?}, stationary_seconds = {}",
         config.tracking.min_movement,
-        config.tracking.require_movement,
+        config.tracking_for(&camera).require_movement,
         config.tracking.stationary_seconds
     );
     let config = Arc::new(config);

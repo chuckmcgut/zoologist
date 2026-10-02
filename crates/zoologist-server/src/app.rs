@@ -20,13 +20,18 @@ pub enum ApiEvent {
     Started(EventRecord),
     Updated(EventRecord),
     Ended(EventRecord),
+    /// The event turned out to be nothing this camera reports, and is gone.
+    Removed(EventRecord),
 }
 
 impl ApiEvent {
     /// The event record carried by this message.
     pub fn record(&self) -> &EventRecord {
         match self {
-            ApiEvent::Started(r) | ApiEvent::Updated(r) | ApiEvent::Ended(r) => r,
+            ApiEvent::Started(r)
+            | ApiEvent::Updated(r)
+            | ApiEvent::Ended(r)
+            | ApiEvent::Removed(r) => r,
         }
     }
 }

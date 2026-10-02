@@ -120,6 +120,8 @@ record = true
 labels = ["person", "vehicle", "animal", "motion"]   # drop "motion" for a view full of trees:
                                                      # sun and shadows make motion events all day
 # motion_mask = [[0.0,0.0, 0.3,0.0, 0.3,0.08, 0.0,0.08]]   # e.g. the timestamp overlay
+# require_movement = []          # this camera's own tracking.require_movement. [] for a view of a
+                                 # road where nothing parks: every vehicle seen is an event
 
 # --- Reolink 4K/8MP wired camera over RTSP (main stream may be H.265) ---
 [[cameras]]

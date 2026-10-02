@@ -95,6 +95,51 @@ async fn marked_nothing_spot(app: &AppState, camera_id: &str, id: u64) -> bool {
     found.unwrap_or(false)
 }
 
+/// A person or an animal that turned out to be nothing: the event becomes plain motion. A camera
+/// whose `labels` leave out motion gets no motion events this way either: there the event is
+/// removed, with its pictures and its clip.
+async fn became_motion(app: &AppState, camera_id: &str, id: u64) {
+    let camera = app.config.cameras.iter().find(|c| c.id == camera_id);
+    if camera.is_none_or(|c| c.labels.contains(&Label::Motion)) {
+        let patch = EventPatch {
+            label: Some(Label::Motion),
+            ..Default::default()
+        };
+        if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
+            app.publish(ApiEvent::Updated(record));
+        }
+        return;
+    }
+    let removed = app
+        .store
+        .call(move |s| {
+            let record = s.get_event(id)?;
+            if record.is_some() {
+                s.delete_event(id)?;
+            }
+            Ok(record)
+        })
+        .await;
+    let Ok(Some(record)) = removed else {
+        return;
+    };
+    // A Hub recording is the clip of every event found in it, so it stays.
+    let own_clip = camera.is_some_and(|c| c.kind == CameraKind::Stream);
+    let clip = record.clip_path.as_ref().filter(|_| own_clip);
+    for rel in [
+        clip,
+        record.snapshot_path.as_ref(),
+        record.thumb_path.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let _ = tokio::fs::remove_file(app.data_dir.join(rel)).await;
+    }
+    tracing::info!(camera = %camera_id, event = id, "not an event on this camera: removed");
+    app.publish(ApiEvent::Removed(record));
+}
+
 /// What every update of the writer needs besides the event itself.
 struct Shared {
     clip_slots: Arc<Semaphore>,
@@ -348,13 +393,7 @@ async fn handle(
                 && marked_nothing_spot(app, camera_id, id).await
             {
                 tracing::info!(event = id, label = %o.label, "still, in a spot marked as nothing: motion");
-                let patch = EventPatch {
-                    label: Some(Label::Motion),
-                    ..Default::default()
-                };
-                if let Some(record) = app.store.call(move |s| s.update_event(id, &patch)).await? {
-                    app.publish(ApiEvent::Updated(record));
-                }
+                became_motion(app, camera_id, id).await;
                 return Ok(());
             }
             let check = o.label == Label::Animal
@@ -382,6 +421,7 @@ async fn handle(
                 let app = app.clone();
                 let still_as_motion = app.config.species.still_unnamed_as_motion;
                 let person = o.label == Label::Person;
+                let camera_id = camera_id.to_string();
                 jobs.spawn(async move {
                     // Sharp views from full-resolution snapshots, where the detector finds the
                     // animal again.
@@ -425,6 +465,10 @@ async fn handle(
                         // and could not be named.
                         Ok(SpeciesAnswer::NotAnimal(label)) => {
                             tracing::info!(event = id, label = %label, moved, person, "relabelled");
+                            if label == Label::Motion {
+                                became_motion(&app, &camera_id, id).await;
+                                return;
+                            }
                             EventPatch {
                                 label: Some(label),
                                 ..Default::default()
@@ -484,6 +528,7 @@ async fn clip_job(
     let result =
         tokio::task::spawn_blocking(move || build_clip(&dir, &files, from, to, &dir.join(out)))
             .await;
+    let built = matches!(result, Ok(Ok(_))).then(|| app.data_dir.join(&out_rel));
     let patch = match result {
         Ok(Ok(clip)) => EventPatch {
             clip_path: Some(Some(out_rel)),
@@ -499,8 +544,15 @@ async fn clip_job(
             }
         }
     };
-    if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
-        app.publish(ApiEvent::Updated(record));
+    match app.store.call(move |s| s.update_event(id, &patch)).await {
+        Ok(Some(record)) => app.publish(ApiEvent::Updated(record)),
+        // The event was removed while its clip was cut (see `became_motion`).
+        Ok(None) => {
+            if let Some(path) = built {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+        }
+        Err(_) => {}
     }
 }
 
@@ -508,6 +560,7 @@ async fn clip_job(
 mod spot_tests {
     use chrono::Utc;
     use zoologist_core::Config;
+    use zoologist_core::config::CameraConfig;
     use zoologist_store::{Feedback, Store};
 
     use super::*;
@@ -570,5 +623,57 @@ mod spot_tests {
         // "It was a person" is not a spot to ignore.
         mark(&app, first, Some(Label::Person));
         assert!(!marked_nothing_spot(&app, "container", again).await);
+    }
+
+    /// The owner's Container camera makes no motion events (sun and shadows all day). A
+    /// "person" there that turns out to be the power meter is not kept as motion: it goes, with
+    /// its pictures and its clip. On a camera with motion events it stays, as motion.
+    #[tokio::test]
+    async fn a_demoted_event_is_removed_where_motion_is_not_wanted() {
+        let dir = tempfile::tempdir().unwrap();
+        let camera = |id: &str, labels: &[&str]| -> CameraConfig {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "labels": labels,
+                "detect_url": "rtsp://10.0.0.1/sub", "record_url": "rtsp://10.0.0.1/main"
+            }))
+            .unwrap()
+        };
+        let mut config = Config::default();
+        config.server.data_dir = dir.path().to_path_buf();
+        config.cameras = vec![
+            camera("container", &["person", "vehicle", "animal"]),
+            camera("yard", &["person", "vehicle", "animal", "motion"]),
+        ];
+        let store = Store::open(&dir.path().join("db.redb"), config.station.timezone).unwrap();
+        let app = AppState::without_pipeline(config, store);
+        let mut live = app.events.subscribe();
+        let bbox = BBox::new(0.57, 0.47, 0.59, 0.68);
+
+        let meter = event(&app, "container", bbox);
+        let files = ["clips/1.mp4", "snapshots/1.jpg", "thumbs/1.jpg"];
+        for rel in files {
+            let path = app.data_dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
+        }
+        let patch = EventPatch {
+            clip_path: Some(Some(files[0].into())),
+            snapshot_path: Some(Some(files[1].into())),
+            thumb_path: Some(Some(files[2].into())),
+            ..Default::default()
+        };
+        app.store.update_event(meter, &patch).unwrap();
+        became_motion(&app, "container", meter).await;
+        assert!(app.store.get_event(meter).unwrap().is_none());
+        for rel in files {
+            assert!(!app.data_dir.join(rel).exists(), "{rel} is gone");
+        }
+        assert!(matches!(live.try_recv(), Ok(ApiEvent::Removed(r)) if r.id == meter));
+
+        let stump = event(&app, "yard", bbox);
+        became_motion(&app, "yard", stump).await;
+        let kept = app.store.get_event(stump).unwrap().expect("kept");
+        assert_eq!(kept.label, Label::Motion);
+        assert!(matches!(live.try_recv(), Ok(ApiEvent::Updated(r)) if r.id == stump));
     }
 }

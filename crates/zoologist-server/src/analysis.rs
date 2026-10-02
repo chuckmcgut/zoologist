@@ -51,7 +51,10 @@ pub fn spawn_analysis(
                 (config.inference.keepalive_seconds * 1000.0) as i64,
             );
             let mut motion: Option<MotionDetector> = None;
-            let mut tracker = Tracker::new(&config.tracking, config.species.max_crops_per_event);
+            let mut tracker = Tracker::new(
+                &config.tracking_for(&camera),
+                config.species.max_crops_per_event,
+            );
             let max_event = chrono::Duration::milliseconds(
                 (config.recording.max_event_minutes * 60_000.0) as i64,
             );

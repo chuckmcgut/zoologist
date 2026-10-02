@@ -84,6 +84,7 @@ clips: 10–60 GB, depending on how busy your cameras are and how long you keep 
      RTSP, Wyze and Home Hub cameras.
    - `[[reolink_hubs]]`: your Home Hub, if you have one.
    - `labels`: which kinds of events each camera makes. Remove `"motion"` for a view full of trees.
+   - `require_movement = []`: for a camera on a road where nothing parks, so every vehicle is an event.
    - `motion_mask`: areas to ignore, such as a timestamp overlay.
    - `[retention]` and `[recording]`: how long, and how many gigabytes of, clips and recordings to keep.
 

@@ -367,3 +367,28 @@ One entry per non-obvious decision. Newest at the bottom. Format: Decision / Why
   the way. Only "nothing there" marks count; a mark saying "it was a person" does not. Marks are
   per camera.
 
+
+## 30. 2026-10-02: A walk test: demoted events and vehicles on the road cameras
+
+The owner drove in and walked past all five cameras. Two things were wrong.
+
+- **Decision 1.** When a person or animal event turns out to be nothing (the classifier's second opinion,
+  the still-and-unnamed rule, or a spot marked "nothing"), it becomes motion only on a camera whose
+  `labels` include motion. On any other camera the event is removed, with its snapshot, thumbnail and
+  clip, and the dashboard takes it out of the list (a `removed` message on the live stream).
+- **Why.** The Container camera has no motion events, because sun and shadows move there all day. The
+  label filter only ran when a track started, so the power meter (three times in three minutes) and a
+  second, "animal" track of the owner standing by the truck still appeared as motion.
+- **Limit.** "Name again" and the `reclassify` command still store such an event as motion: someone asked
+  about that event, so it is not deleted under them. A Hub recording is not deleted either, because it is
+  the clip of every event found in it.
+
+- **Decision 2.** A camera can have its own `require_movement`, replacing `tracking.require_movement`.
+  `require_movement = []` is for a camera that looks at a road where nothing parks.
+- **Why.** Both battery cameras stored the truck as motion. On Garden Fork it drives straight at the
+  camera and fills the picture within two seconds; on Garden Road the camera woke late and saw the truck
+  for 0.6 s. The detector scored it 0.90 to 0.95 in both, and the movement rule rejected it. Replayed with
+  the rule off for those cameras, both recordings give a vehicle event.
+- **Not done.** Loosening the rule itself. The box of the owner's parked truck was logged growing sevenfold
+  between two detections, as much as this truck's approach, so any looser rule brings the parked-truck
+  events back on the cameras that face it.

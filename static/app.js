@@ -420,6 +420,16 @@ function putEvent(e, { live = false } = {}) {
   $("#events-empty").hidden = state.tiles.size > 0;
 }
 
+/// Takes an event that no longer exists out of the list (and closes it if it is open).
+function removeEvent(id) {
+  state.events.delete(id);
+  state.tiles.get(id)?.remove();
+  state.tiles.delete(id);
+  $("#events-empty").hidden = state.tiles.size > 0;
+  if (state.viewing === id) $("#viewer").close();
+  scheduleChartRefresh();
+}
+
 async function loadEvents(reset = true) {
   const more = $("#load-more");
   if (reset) {
@@ -1000,6 +1010,8 @@ function connectStream() {
   stream.addEventListener("started", handle("started"));
   stream.addEventListener("updated", handle("updated"));
   stream.addEventListener("ended", handle("ended"));
+  // A "person" or "animal" that was nothing, on a camera that shows no motion events.
+  stream.addEventListener("removed", (event) => removeEvent(Number(event.lastEventId)));
 }
 
 function refreshCharts() {

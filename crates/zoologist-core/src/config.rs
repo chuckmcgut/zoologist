@@ -440,6 +440,10 @@ pub struct CameraConfig {
     /// Which labels create events for this camera.
     #[serde(default = "all_labels")]
     pub labels: Vec<Label>,
+    /// Replaces `tracking.require_movement` for this camera. `[]` on a camera that looks at a
+    /// road where nothing parks: a vehicle driving straight at the camera, or seen for under a
+    /// second, is then an event too.
+    pub require_movement: Option<Vec<Label>>,
     /// Polygons to ignore, each a flat list `[x1, y1, x2, y2, …]` in normalised coordinates.
     #[serde(default)]
     pub motion_mask: Vec<Vec<f32>>,
@@ -458,6 +462,15 @@ fn all_labels() -> Vec<Label> {
 }
 
 impl Config {
+    /// The tracking settings of `camera`: `[tracking]` with the camera's own settings applied.
+    pub fn tracking_for(&self, camera: &CameraConfig) -> TrackingConfig {
+        let mut tracking = self.tracking.clone();
+        if let Some(labels) = &camera.require_movement {
+            tracking.require_movement = labels.clone();
+        }
+        tracking
+    }
+
     /// Reads, parses and validates the configuration file.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -843,6 +856,23 @@ mod tests {
             .iter_mut()
             .find(|c| c.id == id)
             .expect("camera in example")
+    }
+
+    #[test]
+    fn a_camera_can_have_its_own_movement_rule() {
+        let mut config = example();
+        assert_eq!(config.tracking.require_movement, vec![Label::Vehicle]);
+        let id = config.cameras[0].id.clone();
+        assert_eq!(
+            config.tracking_for(&config.cameras[0]).require_movement,
+            vec![Label::Vehicle],
+            "the general rule, unless the camera says otherwise"
+        );
+        camera(&mut config, &id).require_movement = Some(Vec::new());
+        let own = config.tracking_for(&config.cameras[0]);
+        assert!(own.require_movement.is_empty());
+        assert_eq!(own.min_movement, config.tracking.min_movement);
+        assert_eq!(problems(&config), Vec::<String>::new());
     }
 
     #[test]
