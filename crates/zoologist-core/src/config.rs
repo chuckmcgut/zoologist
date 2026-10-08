@@ -208,6 +208,16 @@ pub struct SpeciesConfig {
     /// Learn from the "Wrong" button: a person or animal that never moves, in a spot of the same
     /// camera that someone marked as "nothing there", is stored as motion.
     pub learn_from_marks: bool,
+    /// Group → species, for groups that mean one species where the station is: with
+    /// `cervidae = "white-tailed deer"`, an answer the classifier can only narrow down to the
+    /// deer family (or to a genus in it) is reported as a white-tailed deer. A species the
+    /// classifier is sure of is not changed. Groups are named by their scientific name, species
+    /// by their common or scientific name, both as in the labels file.
+    pub assume: BTreeMap<String, String>,
+    /// When the classifier is only sure of the genus, and the geofence leaves one species of that
+    /// genus at the station's location, report that species ("Odocoileus species" in New York
+    /// is a white-tailed deer). The same applies to a species the geofence rejects.
+    pub narrow_to_local: bool,
 }
 
 impl Default for SpeciesConfig {
@@ -228,6 +238,8 @@ impl Default for SpeciesConfig {
             check_people: true,
             snapshots: true,
             learn_from_marks: true,
+            assume: BTreeMap::new(),
+            narrow_to_local: true,
         }
     }
 }

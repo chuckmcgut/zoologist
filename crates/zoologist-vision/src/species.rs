@@ -13,8 +13,14 @@
 //! 3. otherwise: an unidentified animal.
 //!
 //! This mirrors `speciesnet/ensemble_prediction_combiner.py` and `geofence_utils.py`.
+//!
+//! Zoologist then adds one step of its own. An answer that is only a group ("Odocoileus species",
+//! "Cervidae family") is narrowed to a species when the station's location leaves one candidate:
+//! the species named for that group in `species.assume`, or else, for a genus, its only species
+//! that lives here according to the geofence (`species.narrow_to_local`). A species the geofence
+//! rejects is narrowed the same way within its genus before it is rolled up.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -97,6 +103,29 @@ impl SpeciesLabel {
     /// generic "animal" label.
     pub fn is_non_animal(&self) -> bool {
         self.class.is_empty() || self.common == "human" || self.class == "no cv result"
+    }
+
+    /// `true` if this label is `group` itself or one of its members.
+    fn within(&self, group: &SpeciesLabel) -> bool {
+        let mine = [
+            &self.class,
+            &self.order,
+            &self.family,
+            &self.genus,
+            &self.species,
+        ];
+        let theirs = [
+            &group.class,
+            &group.order,
+            &group.family,
+            &group.genus,
+            &group.species,
+        ];
+        !group.class.is_empty()
+            && mine
+                .iter()
+                .zip(theirs)
+                .all(|(m, t)| t.is_empty() || *m == t)
     }
 
     /// The key of this label's ancestor at `level`, or `None` if the label is not that specific.
@@ -247,6 +276,50 @@ impl Taxonomy {
     fn ancestor(&self, label: &SpeciesLabel, level: Level) -> Option<&SpeciesLabel> {
         self.by_class.get(&label.ancestor_key(level)?)
     }
+
+    /// The group (genus, family, …) called `name`: its scientific name ("cervidae") or its
+    /// common name ("cervidae family"), ignoring case.
+    fn group(&self, name: &str) -> Option<&SpeciesLabel> {
+        let name = name.trim().to_lowercase();
+        self.by_class.values().find(|l| {
+            l.species.is_empty()
+                && !l.class.is_empty()
+                && (l.scientific_name().to_lowercase() == name || l.common == name)
+        })
+    }
+}
+
+/// Resolves `species.assume` (group name → species name) against the model's labels: the result
+/// maps a group's full class string to the species to report for it.
+pub fn resolve_assume(
+    assume: &BTreeMap<String, String>,
+    labels: &[SpeciesLabel],
+    taxonomy: &Taxonomy,
+) -> Result<HashMap<String, SpeciesLabel>, String> {
+    assume
+        .iter()
+        .map(|(group_name, species_name)| {
+            let group = taxonomy.group(group_name).ok_or_else(|| {
+                format!("species.assume: {group_name:?} is not a genus, family, order or class the classifier knows")
+            })?;
+            let wanted = species_name.trim().to_lowercase();
+            let species = labels
+                .iter()
+                .find(|l| {
+                    !l.species.is_empty()
+                        && (l.common == wanted || l.scientific_name().to_lowercase() == wanted)
+                })
+                .ok_or_else(|| {
+                    format!("species.assume: {species_name:?} is not a species the classifier knows")
+                })?;
+            if !species.within(group) {
+                return Err(format!(
+                    "species.assume: {species_name:?} does not belong to {group_name:?}"
+                ));
+            }
+            Ok((group.full_class(), species.clone()))
+        })
+        .collect()
 }
 
 /// Decides what to report from averaged class probabilities.
@@ -257,6 +330,10 @@ pub struct SpeciesRules {
     pub country: Option<String>,
     pub admin1: Option<String>,
     pub min_score: f32,
+    /// `species.assume`, resolved by [`resolve_assume`]: group full class → species to report.
+    pub assume: HashMap<String, SpeciesLabel>,
+    /// `species.narrow_to_local`.
+    pub narrow_to_local: bool,
 }
 
 /// What the species classifier concluded about an "animal" event.
@@ -364,17 +441,60 @@ impl SpeciesRules {
             && (score > CERTAIN || (score > self.min_score && detector_score > DETECTOR_AGREES))
         {
             if !self.blocked(top_label) {
-                return Some(guess(top_label, score));
+                return Some(guess(self.narrow(top_label), score));
             }
-            // Not found here: roll up until the group beats the top score.
+            // Not found here. If its genus has one species that is, it is that one (a "mule
+            // deer" in New York is a white-tailed deer).
+            if let Some(local) = self
+                .taxonomy
+                .ancestor(top_label, Level::Genus)
+                .map(|genus| self.narrow(genus))
+                .filter(|l| !l.species.is_empty())
+            {
+                return Some(guess(local, score));
+            }
+            // Otherwise roll up until the group beats the top score.
             let levels = [Level::Family, Level::Order, Level::Class];
             return self
                 .roll_up(&top, &levels, score - 1e-6)
-                .map(|(label, s)| guess(label, s));
+                .map(|(label, s)| guess(self.narrow(label), s));
         }
         let levels = [Level::Genus, Level::Family, Level::Order, Level::Class];
         self.roll_up(&top, &levels, self.min_score)
-            .map(|(label, s)| guess(label, s))
+            .map(|(label, s)| guess(self.narrow(label), s))
+    }
+
+    /// Narrows a group answer to a species when the station's location leaves one candidate:
+    ///
+    /// 1. the species named in `species.assume` for the group, or for the nearest group above it;
+    /// 2. else (`species.narrow_to_local`), for a genus at a station with a country: its only
+    ///    species that the geofence does not reject there.
+    ///
+    /// A species, and a group with no or several candidates, is returned unchanged. The second
+    /// rule stops at the genus because the classifier does not know every species: of a whole
+    /// family, the only local species *it knows* is often not the only one that lives here (in
+    /// New York the hummingbird family would become Anna's hummingbird).
+    fn narrow<'a>(&'a self, label: &'a SpeciesLabel) -> &'a SpeciesLabel {
+        if !label.species.is_empty() || label.is_non_animal() {
+            return label;
+        }
+        let assumed = [Level::Genus, Level::Family, Level::Order, Level::Class]
+            .into_iter()
+            .filter_map(|level| label.ancestor_key(level))
+            .find_map(|key| self.assume.get(&key));
+        if let Some(species) = assumed {
+            return species;
+        }
+        if !self.narrow_to_local || self.country.is_none() || label.genus.is_empty() {
+            return label;
+        }
+        let mut local = self.labels.iter().filter(|l| {
+            !l.species.is_empty() && !l.is_non_animal() && l.within(label) && !self.blocked(l)
+        });
+        match (local.next(), local.next()) {
+            (Some(only), None) => only,
+            _ => label,
+        }
     }
 
     fn blocked(&self, label: &SpeciesLabel) -> bool {
@@ -460,6 +580,8 @@ impl SpeciesModel {
                 .map_err(|e| DetectorError::Invalid(format!("{}: {e}", p.display())))?,
             None => Geofence::default(),
         };
+        let assume =
+            resolve_assume(&cfg.assume, &labels, &taxonomy).map_err(DetectorError::Invalid)?;
         tracing::info!(labels = labels.len(), "species classifier loaded");
         Ok(Self {
             plan,
@@ -470,6 +592,8 @@ impl SpeciesModel {
                 country: station.country.clone(),
                 admin1: station.admin1_region.clone(),
                 min_score: cfg.min_score,
+                assume,
+                narrow_to_local: cfg.narrow_to_local,
             },
         })
     }

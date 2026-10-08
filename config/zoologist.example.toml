@@ -59,6 +59,11 @@ snapshots = true           # live cameras behind a Reolink Home Hub: name animal
                            # resolution snapshots of the main stream too (sharper than the sub)
 learn_from_marks = true    # a still person or animal where you marked "nothing" before (a
                            # chair, a stump) is stored as motion
+narrow_to_local = true     # a genus with one species that lives in your region is reported as
+                           # that species ("Odocoileus species" in New York: white-tailed deer)
+# Groups that mean one species where you live: when the classifier can only say "deer family" (or
+# a genus in it), report this species. An animal it is sure of (a moose) keeps its own name.
+# assume = { cervidae = "white-tailed deer" }
 # bioclip only:
 # species_list = "/config/my_species.txt"
 # text_embeddings = "/models/bioclip_text_embeddings.f32"

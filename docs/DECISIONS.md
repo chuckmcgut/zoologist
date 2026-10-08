@@ -392,3 +392,33 @@ The owner drove in and walked past all five cameras. Two things were wrong.
 - **Not done.** Loosening the rule itself. The box of the owner's parked truck was logged growing sevenfold
   between two detections, as much as this truck's approach, so any looser rule brings the parked-truck
   events back on the cameras that face it.
+
+
+## 31. 2026-10-07: A group that can only be one species here
+
+Where the owner lives, every deer is a white-tailed deer, but the classifier often answered
+"Odocoileus species" or "Cervidae family". The geofence was only used to reject an answer, never to
+narrow one down.
+
+- **Decision 1.** `species.narrow_to_local` (on by default). When the answer is a genus, and the geofence
+  leaves one species of that genus at the station, that species is reported. A species the geofence
+  rejects is narrowed the same way within its genus before it is rolled up: a "mule deer" in New York is
+  a white-tailed deer, where it used to become "Cervidae family".
+- **Why only a genus.** The classifier knows about 2,000 species, not all of them. Counted with the real
+  files for New York, the rule at family level would turn the hummingbird family into Anna's hummingbird
+  and the parrot family into the budgerigar, because those are the only local species the classifier has
+  heard of. Within a genus this is rarer, and for mammals the answers checked out (red fox,
+  black bear, raccoon, red squirrel, woodchuck). It still goes wrong for a few birds: "Icterus species"
+  becomes Bullock's oriole, because the classifier does not know the Baltimore oriole.
+- **Decision 2.** `species.assume`, a list of group → species, for what the first rule cannot know. With
+  `assume = { cervidae = "white-tailed deer" }`, an answer of the deer family, or of a genus in it, is
+  reported as a white-tailed deer. The nearest group wins, and `assume` goes before the first rule. A
+  name the classifier does not know, or a species outside its group, stops the classifier from loading
+  with a message.
+- **Why.** New York's geofence leaves two deer (white-tailed deer and moose), so the deer family
+  cannot be narrowed without the owner saying which one they mean.
+- **Safety.** Neither rule touches a species the classifier is sure of and the geofence accepts: a moose
+  scoring 0.9 is still a moose. The stored score and the five candidates are the classifier's own, so the
+  event's details still show what it really saw.
+- **Limit.** Events already stored keep their names until they are named again ("Name again" or the
+  `reclassify` command).

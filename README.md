@@ -27,6 +27,8 @@ the cameras only have to be reachable on your local network.
    [SpeciesNet](https://github.com/google/cameratrapai), Google's camera-trap classifier (about 2,500
    species and groups). A location filter keeps the answers to animals that live in your region, and
    when the model is unsure it answers with a broader group ("bird", "deer family") instead of guessing.
+   A group that can only be one species where you live is reported as that species: a deer genus
+   with one local species, or a group you name yourself (`assume = { cervidae = "white-tailed deer" }`).
 6. **Keeping the evidence.** Each camera is recorded continuously into short segments kept for a few
    hours. When an event ends, its clip is cut from those segments, with a few seconds before and after.
    Old clips are removed by age and by total size, and the events themselves are kept.
@@ -85,6 +87,8 @@ clips: 10–60 GB, depending on how busy your cameras are and how long you keep 
    - `[[reolink_hubs]]`: your Home Hub, if you have one.
    - `labels`: which kinds of events each camera makes. Remove `"motion"` for a view full of trees.
    - `require_movement = []`: for a camera on a road where nothing parks, so every vehicle is an event.
+   - `assume` in `[species]`: groups that mean one species near you, such as
+     `{ cervidae = "white-tailed deer" }`. An answer of "deer family" then becomes that species.
    - `motion_mask`: areas to ignore, such as a timestamp overlay.
    - `[retention]` and `[recording]`: how long, and how many gigabytes of, clips and recordings to keep.
 

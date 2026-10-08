@@ -30,7 +30,25 @@ fn rules(geofence: &str, country: Option<&str>, admin1: Option<&str>) -> Species
         country: country.map(str::to_string),
         admin1: admin1.map(str::to_string),
         min_score: 0.65,
+        assume: HashMap::new(),
+        narrow_to_local: true,
     }
+}
+
+/// `rules` with `species.assume` set to `pairs`.
+fn rules_assuming(
+    geofence: &str,
+    country: Option<&str>,
+    admin1: Option<&str>,
+    pairs: &[(&str, &str)],
+) -> SpeciesRules {
+    let mut r = rules(geofence, country, admin1);
+    let assume = pairs
+        .iter()
+        .map(|(g, s)| (g.to_string(), s.to_string()))
+        .collect();
+    r.assume = resolve_assume(&assume, &r.labels, &r.taxonomy).unwrap();
+    r
 }
 
 /// Probabilities for the six animal/blank/human test labels ("vehicle" gets 0).
@@ -178,13 +196,120 @@ fn geofence_rules() {
 fn geofenced_species_rolls_up_instead() {
     let json = r#"{"mammalia;carnivora;canidae;vulpes;lagopus": {"allow": {"USA": ["AK"]}}}"#;
     let r = rules(json, Some("USA"), Some("NY"));
-    // "Arctic fox" 0.85 in New York is not possible there. Like SpeciesNet, a geofenced answer
-    // rolls up starting at family level (genus is skipped).
+    // "Arctic fox" 0.85 in New York is not possible there, and the red fox is the only fox of
+    // its genus that is: it is a red fox.
+    let g = r
+        .decide(&probs([0.1, 0.0, 0.0, 0.05, 0.0, 0.85]), 0.9)
+        .unwrap();
+    assert_eq!(g.common_name, "Red fox");
+    assert_eq!(g.candidates[0].0, "Arctic fox");
+
+    // With no fox of that genus left either, the answer rolls up. Like SpeciesNet, it starts at
+    // family level (genus is skipped).
+    let json = r#"{
+        "mammalia;carnivora;canidae;vulpes;lagopus": {"allow": {"USA": ["AK"]}},
+        "mammalia;carnivora;canidae;vulpes;vulpes": {"block": {"USA": ["NY"]}}
+    }"#;
+    let r = rules(json, Some("USA"), Some("NY"));
     let g = r
         .decide(&probs([0.1, 0.0, 0.0, 0.05, 0.0, 0.85]), 0.9)
         .unwrap();
     assert_eq!(g.scientific_name, "Canidae");
     assert!(g.score > 0.85);
+}
+
+#[test]
+fn a_group_with_one_local_species_is_that_species() {
+    let json = r#"{"mammalia;carnivora;canidae;vulpes;lagopus": {"allow": {"USA": ["AK"]}}}"#;
+    // Split between red and arctic fox: the genus Vulpes is sure (0.75).
+    let split = probs([0.4, 0.0, 0.0, 0.25, 0.0, 0.35]);
+    // In New York only the red fox lives, so it is one.
+    let g = rules(json, Some("USA"), Some("NY"))
+        .decide(&split, 0.9)
+        .unwrap();
+    assert_eq!(
+        (g.scientific_name.as_str(), g.common_name.as_str()),
+        ("Vulpes vulpes", "Red fox")
+    );
+    assert!((g.score - 0.75).abs() < 1e-5);
+    // In Alaska both live, and without a location nothing is known: the genus stays.
+    for r in [
+        rules(json, Some("USA"), Some("AK")),
+        rules(json, None, None),
+    ] {
+        assert_eq!(r.decide(&split, 0.9).unwrap().scientific_name, "Vulpes");
+    }
+    // So it does with `narrow_to_local` off.
+    let mut off = rules(json, Some("USA"), Some("NY"));
+    off.narrow_to_local = false;
+    assert_eq!(off.decide(&split, 0.9).unwrap().scientific_name, "Vulpes");
+    // Only a genus is narrowed. A family stays, even with one local species among those the
+    // classifier knows: it does not know them all.
+    let json = r#"{
+        "mammalia;carnivora;canidae;vulpes;lagopus": {"allow": {"USA": ["AK"]}},
+        "mammalia;carnivora;canidae;urocyon;cinereoargenteus": {"block": {"USA": ["NY"]}},
+        "mammalia;carnivora;canidae;canis;latrans": {"block": {"USA": ["NY"]}}
+    }"#;
+    let g = rules(json, Some("USA"), Some("NY"))
+        .decide(&probs([0.4, 0.0, 0.35, 0.25, 0.0, 0.0]), 0.9)
+        .unwrap();
+    assert_eq!(g.scientific_name, "Canidae");
+}
+
+#[test]
+fn an_assumed_species_replaces_its_group() {
+    let r = rules_assuming("{}", None, None, &[("Canidae", "Coyote")]);
+    // The family, and a genus in it, become the assumed species...
+    let g = r
+        .decide(&probs([0.4, 0.35, 0.0, 0.25, 0.0, 0.0]), 0.9)
+        .unwrap();
+    assert_eq!(
+        (g.scientific_name.as_str(), g.common_name.as_str()),
+        ("Canis latrans", "Coyote")
+    );
+    let g = r
+        .decide(&probs([0.4, 0.0, 0.0, 0.25, 0.0, 0.35]), 0.9)
+        .unwrap();
+    assert_eq!(g.common_name, "Coyote");
+    // ...but a species the classifier is sure of keeps its name, and a wider group is not touched.
+    let g = r
+        .decide(&probs([0.9, 0.05, 0.02, 0.01, 0.01, 0.01]), 0.9)
+        .unwrap();
+    assert_eq!(g.common_name, "Red fox");
+    let r = rules_assuming("{}", None, None, &[("vulpes", "vulpes vulpes")]);
+    let g = r
+        .decide(&probs([0.4, 0.35, 0.0, 0.25, 0.0, 0.0]), 0.9)
+        .unwrap();
+    assert_eq!(g.scientific_name, "Canidae");
+
+    // The nearest group wins, and an assumed species beats the only local one.
+    let json = r#"{"mammalia;carnivora;canidae;vulpes;lagopus": {"allow": {"USA": ["AK"]}}}"#;
+    let r = rules_assuming(
+        json,
+        Some("USA"),
+        Some("NY"),
+        &[("canidae", "coyote"), ("vulpes", "arctic fox")],
+    );
+    let g = r
+        .decide(&probs([0.4, 0.0, 0.0, 0.25, 0.0, 0.35]), 0.9)
+        .unwrap();
+    assert_eq!(g.common_name, "Arctic fox");
+}
+
+#[test]
+fn assume_must_name_known_groups_and_species() {
+    let r = rules("{}", None, None);
+    let check = |group: &str, species: &str| {
+        let assume = [(group.to_string(), species.to_string())].into();
+        resolve_assume(&assume, &r.labels, &r.taxonomy)
+    };
+    assert!(check("canidae", "red fox").is_ok());
+    assert!(check("canine family", "Vulpes vulpes").is_ok());
+    assert!(check("felidae", "red fox").unwrap_err().contains("felidae"));
+    assert!(check("canidae", "wolf").unwrap_err().contains("wolf"));
+    // A group is not a species, and the species must be in the group.
+    assert!(check("canidae", "vulpes species").is_err());
+    assert!(check("vulpes", "coyote").unwrap_err().contains("belong"));
 }
 
 #[test]
@@ -200,6 +325,60 @@ fn voting_weights_crops() {
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// The deer of a station in New York, with the real labels, taxonomy and geofence: there the
+/// geofence leaves white-tailed deer and moose.
+#[test]
+fn deer_in_new_york() {
+    let models = root().join("models");
+    if !models.join("speciesnet_geofence.json").is_file() {
+        eprintln!("speciesnet not installed (scripts/fetch-models.sh); skipping");
+        return;
+    }
+    let read = |name: &str| std::fs::read_to_string(models.join(name)).unwrap();
+    let labels: Vec<SpeciesLabel> = read("speciesnet_labels.txt")
+        .lines()
+        .filter_map(SpeciesLabel::parse)
+        .collect();
+    let taxonomy = Taxonomy::from_lines(read("speciesnet_taxonomy.txt").lines());
+    let assume = [("cervidae".to_string(), "white-tailed deer".to_string())].into();
+    let assume = resolve_assume(&assume, &labels, &taxonomy).unwrap();
+    let mut r = SpeciesRules {
+        labels,
+        taxonomy,
+        geofence: Geofence::from_json(&read("speciesnet_geofence.json")).unwrap(),
+        country: Some("USA".into()),
+        admin1: Some("NY".into()),
+        min_score: 0.65,
+        assume: HashMap::new(),
+        narrow_to_local: true,
+    };
+    let name = |r: &SpeciesRules, scores: &[(&str, f32)]| {
+        let mut probs = vec![0.0; r.labels.len()];
+        for (common, p) in scores {
+            probs[r.labels.iter().position(|l| l.common == *common).unwrap()] = *p;
+        }
+        r.decide(&probs, 0.9).map(|g| g.common_name)
+    };
+    let two_deer = [("white-tailed deer", 0.45), ("mule deer", 0.35)];
+    let mule = [("mule deer", 0.9)];
+    let family = [("white-tailed deer", 0.3), ("moose", 0.25), ("elk", 0.25)];
+    let elk = [("elk", 0.9)];
+    let moose = [("moose", 0.9)];
+
+    // The genus Odocoileus has one species in New York.
+    let white_tail = Some("White-tailed deer".to_string());
+    assert_eq!(name(&r, &two_deer), white_tail);
+    assert_eq!(name(&r, &mule), white_tail);
+    // The family has two, and no elk: those stay "deer family" until `assume` says otherwise.
+    assert_eq!(name(&r, &family), Some("Cervidae family".to_string()));
+    assert_eq!(name(&r, &elk), Some("Cervidae family".to_string()));
+    r.assume = assume;
+    assert_eq!(name(&r, &family), white_tail);
+    assert_eq!(name(&r, &elk), white_tail);
+    // A moose is still a moose.
+    assert_eq!(name(&r, &moose), Some("Moose".to_string()));
 }
 
 #[test]
