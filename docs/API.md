@@ -247,6 +247,41 @@ curl -s "$Z/stats/hourly?date=2026-09-19"
 # {"date":"2026-09-19","hours":[{"hour":0,"person":0,"vehicle":1,"animal":2,"motion":0}, … 24 entries]}
 ```
 
+## Animals for other programs
+
+Two routes for a home dashboard or a script that only wants to know which animals came by. They give names,
+counts and times, and nothing else: no people, vehicles or motion, and no cameras, event ids, scores, pictures
+or clips. The shape is the same as Birdsong's `stats/recent` and `stats/daily`.
+
+A "Wrong" mark is taken into account: an "animal" marked as nothing or as a person is not counted, an event
+marked as an animal is, and a species typed in with the mark replaces the classifier's (it has no scientific
+name, so `scientific_name` is `""`). Names are grouped ignoring case, and can be a group ("Cervidae family")
+when that is all the classifier was sure of. `unidentified` counts the animals without a name, and `total`
+includes them.
+
+### `GET /animals/recent`
+
+The animals seen within `window` (`1h`, `6h`, `24h` (default), `7d` or `30d`), most seen first.
+
+```sh
+curl -s "$Z/animals/recent?window=7d"
+# {"window":"7d","since":"2026-10-01T19:40:00Z","until":"2026-10-08T19:40:00Z","total":14,"unidentified":2,
+#  "species":[{"common_name":"White-tailed deer","scientific_name":"Odocoileus virginianus","count":9,
+#              "last_seen":"2026-10-08T11:02:31Z"}, …]}
+```
+
+### `GET /animals/daily`
+
+The animals seen on one local date (`date=YYYY-MM-DD`, default today in the station's time zone). `by_hour`
+has 24 counts, for the local hours 0 to 23.
+
+```sh
+curl -s "$Z/animals/daily?date=2026-10-08"
+# {"date":"2026-10-08","total":5,"unidentified":1,
+#  "species":[{"common_name":"White-tailed deer","scientific_name":"Odocoileus virginianus","total":4,
+#              "by_hour":[0,0,0,0,0,1,2,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0]}]}
+```
+
 ## Live updates
 
 ### `GET /stream`

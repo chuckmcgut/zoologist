@@ -1,5 +1,6 @@
 //! The HTTP API under `/api/v1` and the web UI's static files (plan Phase 9).
 
+mod animals;
 mod events;
 mod health;
 mod stats;
@@ -44,6 +45,8 @@ pub fn router(app: AppState) -> Router {
         .route("/stats/labels", get(stats::labels))
         .route("/stats/species", get(stats::species))
         .route("/stats/hourly", get(stats::hourly))
+        .route("/animals/recent", get(animals::recent))
+        .route("/animals/daily", get(animals::daily))
         .route("/stream", get(stream::stream))
         .fallback(|| async { ApiError::not_found("no such API route") });
 

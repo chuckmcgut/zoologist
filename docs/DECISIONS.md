@@ -422,3 +422,19 @@ narrow one down.
   event's details still show what it really saw.
 - **Limit.** Events already stored keep their names until they are named again ("Name again" or the
   `reclassify` command).
+
+
+## 32. 2026-10-08: Animal counts for other programs
+
+- **Decision.** Two routes, `GET /animals/recent` and `GET /animals/daily`, give the animals seen and how
+  often: names, counts and times. They leave out people, vehicles and motion, and also cameras, event ids,
+  scores, pictures and clips.
+- **Why.** The owner's home dashboard should show which animals came by. `/stats/species` is made for
+  Zoologist's own dashboard: it carries an event id for the "play best clip" button, and `/events` carries
+  everything. A route that cannot give away more than names and counts is safe to pass on to a public page.
+- **Shape.** The same as Birdsong's `stats/recent` and `stats/daily`, which that dashboard already reads.
+  Animals without a name are counted in `unidentified`, not listed as a species.
+- **Wrong marks.** They correct these counts: an "animal" marked as nothing or as a person is left out, and
+  a species typed in with the mark replaces the classifier's. `/stats/species` still ignores marks.
+- **Limit.** The counts are events, not animals: one deer that passes three cameras is counted three times.
+

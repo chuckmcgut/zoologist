@@ -357,16 +357,23 @@ impl Store {
     /// Event counts per local hour and label for one local date in the station time zone.
     pub fn stats_hourly(&self, date: NaiveDate, camera: Option<&str>) -> Result<[HourCounts; 24]> {
         let mut hours = [HourCounts::default(); 24];
-        // The local day can be 23–25 h long around DST; widen the UTC range and filter by date.
-        let start = self.local_midnight(date) - chrono::Duration::hours(3);
-        let end =
-            self.local_midnight(date + chrono::Duration::days(1)) + chrono::Duration::hours(3);
-        for e in self.events_between(start, Some(end))? {
-            if e.local_date == date && camera.is_none_or(|c| e.camera_id == c) {
+        for e in self.events_on(date)? {
+            if camera.is_none_or(|c| e.camera_id == c) {
                 hours[e.local_hour as usize % 24].add(e.label);
             }
         }
         Ok(hours)
+    }
+
+    /// Events that started on one local date in the station time zone, oldest first.
+    pub fn events_on(&self, date: NaiveDate) -> Result<Vec<EventRecord>> {
+        // The local day can be 23–25 h long around DST; widen the UTC range and filter by date.
+        let start = self.local_midnight(date) - chrono::Duration::hours(3);
+        let end =
+            self.local_midnight(date + chrono::Duration::days(1)) + chrono::Duration::hours(3);
+        let mut events = self.events_between(start, Some(end))?;
+        events.retain(|e| e.local_date == date);
+        Ok(events)
     }
 
     fn local_midnight(&self, date: NaiveDate) -> DateTime<Utc> {

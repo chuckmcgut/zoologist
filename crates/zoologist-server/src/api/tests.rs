@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 use zoologist_core::{BBox, Config, Label, SpeciesGuess};
-use zoologist_store::{ClipState, EventPatch, NewEvent, Store};
+use zoologist_store::{ClipState, EventPatch, Feedback, NewEvent, Store};
 
 use super::router;
 use crate::app::{ApiEvent, AppState};
@@ -281,6 +281,174 @@ async fn stats_routes() {
     let (status, body) = get(&f.app, "/api/v1/stats/hourly").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["hours"].as_array().unwrap().len(), 24);
+}
+
+/// Stores an animal event `minutes_ago` named `common` (no name when `None`); returns its id.
+fn insert_animal(app: &AppState, minutes_ago: i64, common: Option<&str>) -> u64 {
+    let e = app
+        .store
+        .insert_event(&new_event(Label::Animal, minutes_ago))
+        .unwrap();
+    if let Some(common) = common {
+        let patch = EventPatch {
+            species: Some(SpeciesGuess {
+                scientific_name: "Odocoileus virginianus".into(),
+                common_name: common.into(),
+                score: 0.9,
+                model_id: "speciesnet".into(),
+                candidates: vec![],
+            }),
+            ..Default::default()
+        };
+        app.store.update_event(e.id, &patch).unwrap();
+    }
+    e.id
+}
+
+fn mark(app: &AppState, id: u64, actual: Option<Label>, species: Option<&str>) {
+    let patch = EventPatch {
+        feedback: Some(Some(Feedback {
+            actual,
+            species: species.map(str::to_string),
+            note: None,
+            at: Utc::now(),
+        })),
+        ..Default::default()
+    };
+    app.store.update_event(id, &patch).unwrap();
+}
+
+#[tokio::test]
+async fn animals_are_counted_without_people_or_media() {
+    let f = fixture();
+    insert_fox(&f.app); // 30 minutes ago
+    insert_animal(&f.app, 20, Some("White-tailed deer"));
+    let latest_deer = insert_animal(&f.app, 10, Some("white-tailed deer"));
+    insert_animal(&f.app, 5, None);
+    for label in [Label::Person, Label::Vehicle, Label::Motion] {
+        f.app.store.insert_event(&new_event(label, 3)).unwrap();
+    }
+    // Outside the 1 h window.
+    insert_animal(&f.app, 90, Some("White-tailed deer"));
+
+    let (status, body) = get(&f.app, "/api/v1/animals/recent?window=1h").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["window"], "1h");
+    assert!(body["since"].is_string() && body["until"].is_string());
+    assert_eq!(
+        (&body["total"], &body["unidentified"]),
+        (&4.into(), &1.into())
+    );
+    let species = body["species"].as_array().unwrap();
+    assert_eq!(
+        species.len(),
+        2,
+        "most seen first, names grouped ignoring case"
+    );
+    assert_eq!(species[0]["common_name"], "White-tailed deer");
+    assert_eq!(species[0]["scientific_name"], "Odocoileus virginianus");
+    assert_eq!(species[0]["count"], 2);
+    let deer = f.app.store.get_event(latest_deer).unwrap().unwrap();
+    assert_eq!(
+        species[0]["last_seen"],
+        serde_json::to_value(deer.started_at).unwrap()
+    );
+    assert_eq!(species[1]["common_name"], "red fox");
+    // Names, counts and times only.
+    let text = body.to_string();
+    for private in [
+        "yard", "url", "path", "id\"", "score", "bbox", "person", "vehicle",
+    ] {
+        assert!(!text.contains(private), "{private} in {text}");
+    }
+    let mut keys: Vec<&String> = species[0].as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["common_name", "count", "last_seen", "scientific_name"]
+    );
+
+    let (status, _) = get(&f.app, "/api/v1/animals/recent?window=2h").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn wrong_marks_correct_the_animal_counts() {
+    let f = fixture();
+    let stump = insert_animal(&f.app, 10, Some("White-tailed deer"));
+    let owner = insert_animal(&f.app, 11, Some("White-tailed deer"));
+    let renamed = insert_animal(&f.app, 12, Some("White-tailed deer"));
+    let unsure = insert_animal(&f.app, 13, Some("White-tailed deer"));
+    let dog = f
+        .app
+        .store
+        .insert_event(&new_event(Label::Person, 14))
+        .unwrap()
+        .id;
+    insert_animal(&f.app, 15, Some("White-tailed deer"));
+    mark(&f.app, stump, None, None); // nothing there
+    mark(&f.app, owner, Some(Label::Person), None);
+    mark(&f.app, renamed, Some(Label::Animal), Some("Moose"));
+    mark(&f.app, unsure, Some(Label::Animal), None); // an animal, but not that one
+    mark(&f.app, dog, Some(Label::Animal), Some("Domestic dog")); // a "person" that was a dog
+
+    let (_, body) = get(&f.app, "/api/v1/animals/recent").await;
+    assert_eq!(
+        (&body["total"], &body["unidentified"]),
+        (&4.into(), &1.into())
+    );
+    let counts: Vec<(&str, u64)> = body["species"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["common_name"].as_str().unwrap(),
+                s["count"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        counts,
+        [("Domestic dog", 1), ("Moose", 1), ("White-tailed deer", 1)]
+    );
+}
+
+#[tokio::test]
+async fn animals_of_a_day_are_counted_by_hour() {
+    let f = fixture();
+    let id = insert_animal(&f.app, 0, Some("White-tailed deer"));
+    insert_animal(&f.app, 0, None);
+    f.app
+        .store
+        .insert_event(&new_event(Label::Person, 0))
+        .unwrap();
+    let deer = f.app.store.get_event(id).unwrap().unwrap();
+
+    // Today is the default; the event's own date is asked for in case midnight just passed.
+    let (status, body) = get(&f.app, "/api/v1/animals/daily").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["date"].is_string());
+    let uri = format!("/api/v1/animals/daily?date={}", deer.local_date);
+    let (_, body) = get(&f.app, &uri).await;
+    assert_eq!(body["date"], deer.local_date.to_string());
+    assert_eq!(
+        (&body["total"], &body["unidentified"]),
+        (&2.into(), &1.into())
+    );
+    let species = body["species"].as_array().unwrap();
+    assert_eq!(species.len(), 1);
+    assert_eq!(species[0]["total"], 1);
+    let by_hour = species[0]["by_hour"].as_array().unwrap();
+    assert_eq!(by_hour.len(), 24);
+    assert_eq!(by_hour[deer.local_hour as usize], 1);
+    assert_eq!(by_hour.iter().map(|h| h.as_u64().unwrap()).sum::<u64>(), 1);
+
+    let (_, body) = get(&f.app, "/api/v1/animals/daily?date=2020-01-01").await;
+    assert_eq!(body["total"], 0);
+    assert_eq!(body["species"].as_array().unwrap().len(), 0);
+    let (status, _) = get(&f.app, "/api/v1/animals/daily?date=yesterday").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
