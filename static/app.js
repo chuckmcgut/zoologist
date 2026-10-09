@@ -402,25 +402,55 @@ function tile(e) {
   const node = el("div", { class: "tile", "data-id": e.id }, open);
   // An event that is still going on cannot be deleted.
   if (!e.active) {
-    node.append(el("button", { type: "button", class: "tile-delete", title: "Delete this event", "aria-label": `Delete ${what}`, onclick: () => deleteEvent(e.id) }, "×"));
+    const remove = el("button", { type: "button", class: "tile-delete", title: "Delete this event", "aria-label": `Delete ${what}` }, "×");
+    remove.onclick = () => deleteClicked(remove, e.id, "Delete?", (text) => { remove.title = text || "Delete this event"; });
+    node.append(remove);
   }
   return node;
 }
 
-// Deletes an event for good, after asking. The tile goes when the server confirms.
-async function deleteEvent(id) {
-  const e = state.events.get(id);
-  if (!e) return false;
-  const what = `${eventTitle(e)} on ${cameraName(e.camera_id)}, ${fmt.dateTime(e.started_at)}`;
-  if (!window.confirm(`Delete this event for good?\n\n${what}\n\nIts clip and pictures are deleted too.`)) return false;
+// Deleting takes two clicks on the same button: the first one arms it for a few seconds. The
+// browser's own confirm box is not used, because browsers do not always show it (a page
+// inside another page's frame, or after "don't show more dialogs").
+const DELETE_ARMED_MS = 5000;
+
+function disarmDelete(button) {
+  clearTimeout(button.disarmTimer);
+  if (button.dataset.armed !== "1") return;
+  delete button.dataset.armed;
+  button.classList.remove("armed");
+  button.textContent = button.dataset.idle;
+}
+
+/// A click on a delete button of event `id`. `armedText` is what the button says while it waits
+/// for the second click; `report` shows a message next to it.
+async function deleteClicked(button, id, armedText, report) {
+  if (button.dataset.armed !== "1") {
+    button.dataset.idle = button.textContent;
+    button.dataset.armed = "1";
+    button.classList.add("armed");
+    button.textContent = armedText;
+    report("Click again to delete this event, its clip and its pictures for good.");
+    clearTimeout(button.disarmTimer);
+    button.disarmTimer = setTimeout(() => {
+      disarmDelete(button);
+      report("");
+    }, DELETE_ARMED_MS);
+    return;
+  }
+  disarmDelete(button);
+  button.disabled = true;
   try {
     await api(`events/${id}`, { method: "DELETE" });
   } catch (err) {
-    window.alert(`Could not delete it: ${err.message}`);
-    return false;
+    report(`Could not delete it: ${err.message}`);
+    return;
+  } finally {
+    button.disabled = false;
   }
+  report("");
+  // The server also announces it; whichever comes first removes the tile.
   if (state.events.has(id)) removeEvent(id);
-  return true;
 }
 
 /// Adds or replaces the tile of `e`. New live events go to the top; others keep their place.
@@ -623,6 +653,7 @@ function renderFeedback(e) {
     state.feedbackFor = e.id;
     $("#wrong-form").hidden = true;
     $("#viewer-action-status").textContent = "";
+    disarmDelete($("#viewer-delete"));
   }
   const f = e.feedback;
   const note = $("#viewer-feedback");
@@ -1184,7 +1215,9 @@ async function init() {
   $("#viewer-undo-wrong").addEventListener("click", undoWrong);
   $("#viewer-rename").addEventListener("click", nameAgain);
   $("#viewer-main").addEventListener("click", toggleMain);
-  $("#viewer-delete").addEventListener("click", () => deleteEvent(state.viewing));
+  $("#viewer-delete").addEventListener("click", (ev) => {
+    deleteClicked(ev.currentTarget, state.viewing, "Really delete?", (text) => { $("#viewer-action-status").textContent = text; });
+  });
   $("#viewer-video").addEventListener("error", mainFailed);
   $("#viewer-video").addEventListener("loadeddata", () => {
     if (state.mainFor === state.viewing && state.mainFor !== null) $("#viewer-action-status").textContent = "";

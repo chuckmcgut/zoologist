@@ -158,6 +158,8 @@ select, input[type="date"] {
   font-size: 1.1rem; line-height: 1; color: #fff; background: rgb(0 0 0 / 0.55); cursor: pointer; opacity: 0.75;
 }
 .tile-delete:hover, .tile-delete:focus-visible { opacity: 1; background: var(--bad); }
+.tile-delete.armed { width: auto; padding: 0 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; opacity: 1; background: var(--bad); }
+.button.danger.armed { color: #fff; background: var(--bad); border-color: var(--bad); }
 /* A full-resolution stream that the camera sends on its side is turned upright here. */
 #live-stage { position: relative; }
 #live-stage.turned { margin-top: 10px; background: #000; border-radius: 8px; overflow: hidden; }

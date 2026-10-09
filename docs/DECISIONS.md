@@ -470,7 +470,10 @@ narrow one down.
 ## 35. 2026-10-09: Deleting an event
 
 - **Decision.** `DELETE /events/{id}`, a "Delete" button in the event viewer and a × on each tile of the
-  event list. The page asks first. The event goes for good, with its pictures and its clip.
+  event list. The event goes for good, with its pictures and its clip.
+- **Asking first.** The button must be clicked twice: the first click arms it for 5 seconds ("Really
+  delete?"). The browser's own confirm box was used at first and did not appear for the owner, so the
+  delete silently did nothing.
 - **Shared recordings.** One Hub recording is the clip of every event found in it, so it stays until
   the last of them is deleted.
 - **Not while it happens.** An event that has not ended is refused: the writer still updates it.
