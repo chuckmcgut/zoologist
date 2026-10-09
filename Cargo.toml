@@ -11,7 +11,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 license = "MIT"
 rust-version = "1.91"
@@ -50,7 +50,7 @@ http-body-util = "0.1"
 ureq = { version = "3.4", default-features = false, features = ["json"] }
 
 # video
-retina = { version = "0.4.20", default-features = false }   # enable "h265" only if an H.265 stream is recorded
+retina = { version = "0.4.20", default-features = false, features = ["h265"] }   # H.265: the full-resolution live view
 url = "2"
 h264-reader = "0.9"
 # Pure-Rust H.264 decoder. Its default "global-alloc" feature replaces the allocator of the whole

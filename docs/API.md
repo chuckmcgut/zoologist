@@ -130,12 +130,16 @@ The camera's live video as fragmented MP4, for the browser's MediaSource (the da
 the stream Zoologist already receives (the record stream, or the detect stream when the camera does not
 record), passed through without decoding.
 
+- **Full resolution:** `?full=1` gives the camera's full-resolution stream when the live view normally shows a
+  smaller one (`"full": true` in `/cameras`). Zoologist opens that stream for this viewer only and closes it
+  when they leave; it is often H.265. A stream sent on its side (Reolink panorama cameras) is turned by the
+  page, by `full_rotate` from `/cameras` or by 270° when it is taller than wide. At most two at once (503). 404 for a camera without one, 502 when it
+  does not start.
 - **Start:** a new viewer starts at the latest keyframe.
 - **Codec:** the `X-Codec` header gives the codec string, e.g. `avc1.4d401f`.
 - **Slow viewers:** a viewer that falls behind skips to the next keyframe.
 - **End of stream:** the stream ends when the camera reconnects with new settings, and the player reconnects.
-- **Errors:** 404 before the camera has sent any video, and 400 for H.265 cameras (browsers cannot play them
-  live).
+- **Errors:** 404 before the camera has sent any video.
 
 ```sh
 curl -s -m 5 -o live.mp4 $Z/cameras/nc200-color/live.mp4 && ffprobe live.mp4
@@ -173,6 +177,16 @@ One event, or 404.
 curl -s $Z/events/1
 ```
 
+### `DELETE /events/{id}`
+
+Deletes the event for good, with its snapshot, thumbnail, sharp view and clip. A Hub recording that is
+also the clip of another event stays until that one is deleted too. Returns `{"deleted": 12}`; 400 while
+the event is still going on. A deleted recording is not imported from the Hub again.
+
+```bash
+curl -s -X DELETE "$Z/events/12"
+```
+
 ### `POST /events/{id}/feedback` and `DELETE /events/{id}/feedback`
 
 Marks an event as wrong, or takes the mark back. The event is not changed otherwise: the feedback is
@@ -202,6 +216,19 @@ The clip (H.264 MP4, fast start), with `Range` support so browsers can seek. 404
 ```sh
 curl -s -o fox.mp4 $Z/events/1/clip.mp4
 curl -s -H "Range: bytes=0-99" -o /dev/null -w "%{http_code}\n" $Z/events/1/clip.mp4   # 206
+```
+
+### `GET /events/{id}/main.mp4`
+
+The full-resolution recording of a battery camera's event (`kind = "hub_clips"`), as the Hub holds it:
+usually H.265, which Safari and Chromium-based browsers play and Firefox may not. Zoologist stores only the
+sub-stream clip; this one is downloaded from the Hub on the first request (a few seconds), kept in `tmp/main/` for an hour, and served with `Range` support.
+
+- 404 for other cameras, and when the Hub no longer has the recording.
+- 502 when the Hub does not answer.
+
+```sh
+curl -s -o main.mp4 $Z/events/1/main.mp4
 ```
 
 ### `GET /events/{id}/snapshot.jpg` and `GET /events/{id}/thumb.jpg`

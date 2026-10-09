@@ -223,6 +223,26 @@ channel = 3
         }
     }
     let health = pipeline.app.hubs[0].status.read().unwrap().clone();
+    // The fox's full-resolution recording comes from the Hub when asked for, with byte ranges.
+    let mut main = Vec::new();
+    for _ in 0..2 {
+        let id = fox.as_ref().map_or(0, |e| e.id);
+        let request = axum::http::Request::get(format!("/api/v1/events/{id}/main.mp4"))
+            .header("Range", "bytes=0-99")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(
+            zoologist_server::api::router(pipeline.app.clone()),
+            request,
+        )
+        .await
+        .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        main.push((status, body));
+    }
     pipeline.shutdown().await;
 
     let fox =
@@ -247,11 +267,16 @@ channel = 3
         1,
         "imported exactly once: {downloaded:?}"
     );
+    assert_eq!(fake.downloads.load(Ordering::SeqCst), downloaded.len());
+    for (status, body) in &main {
+        assert_eq!(*status, axum::http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(body[..], fake.clip[..100]);
+    }
+    // Sharp views and the full-resolution recording: the second request used the fetched copy.
     assert!(
-        downloaded.iter().filter(|n| *n == "0-0-fox").count() <= 1,
+        downloaded.iter().filter(|n| *n == "0-0-fox").count() <= 2,
         "{downloaded:?}"
     );
-    assert_eq!(fake.downloads.load(Ordering::SeqCst), downloaded.len());
     // The fox's best sharp view is kept as the event's close-up.
     let sharp = data
         .path()

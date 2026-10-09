@@ -31,6 +31,7 @@ const state = {
   events: new Map(), // event id -> event JSON
   nextBeforeId: null,
   viewing: null, // event id shown in the viewer
+  mainFor: null, // event id whose full-resolution recording is shown, not its clip
   clipPoll: null,
   chartTimer: null,
   lastChartRefresh: 0,
@@ -383,13 +384,13 @@ function tile(e) {
   if (e.feedback) pic.append(el("span", { class: "badge wrong-badge" }, "✗ wrong"));
   const when = el("span", { class: "when", "data-iso": e.started_at }, fmt.relative(e.started_at));
   const duration = e.active ? "ongoing" : fmt.duration(eventDuration(e));
-  return el(
+  const what = `${title} on ${cameraName(e.camera_id)} at ${fmt.time(e.started_at)}`;
+  const open = el(
     "button",
     {
       type: "button",
-      class: "tile",
-      "data-id": e.id,
-      "aria-label": `${title} on ${cameraName(e.camera_id)} at ${fmt.time(e.started_at)}${e.active ? ", happening now" : ""}. Open`,
+      class: "tile-open",
+      "aria-label": `${what}${e.active ? ", happening now" : ""}. Open`,
       onclick: () => openViewer(e.id),
     },
     pic,
@@ -398,6 +399,28 @@ function tile(e) {
       el("span", { class: "meta" }, `${cameraName(e.camera_id)} · ${duration}`),
       el("span", { class: "meta" }, `${fmt.time(e.started_at)} · `, when)),
   );
+  const node = el("div", { class: "tile", "data-id": e.id }, open);
+  // An event that is still going on cannot be deleted.
+  if (!e.active) {
+    node.append(el("button", { type: "button", class: "tile-delete", title: "Delete this event", "aria-label": `Delete ${what}`, onclick: () => deleteEvent(e.id) }, "×"));
+  }
+  return node;
+}
+
+// Deletes an event for good, after asking. The tile goes when the server confirms.
+async function deleteEvent(id) {
+  const e = state.events.get(id);
+  if (!e) return false;
+  const what = `${eventTitle(e)} on ${cameraName(e.camera_id)}, ${fmt.dateTime(e.started_at)}`;
+  if (!window.confirm(`Delete this event for good?\n\n${what}\n\nIts clip and pictures are deleted too.`)) return false;
+  try {
+    await api(`events/${id}`, { method: "DELETE" });
+  } catch (err) {
+    window.alert(`Could not delete it: ${err.message}`);
+    return false;
+  }
+  if (state.events.has(id)) removeEvent(id);
+  return true;
 }
 
 /// Adds or replaces the tile of `e`. New live events go to the top; others keep their place.
@@ -531,8 +554,15 @@ function renderViewer(e, fresh = false) {
   const video = $("#viewer-video");
   const note = $("#viewer-clip-note");
   clearTimeout(state.clipPoll);
+  // Battery cameras: the Hub still has the full-resolution recording (H.265) for a while.
+  if (state.mainFor !== e.id) state.mainFor = null;
+  const full = state.mainFor === e.id;
+  const onHub = state.cameras.find((c) => c.id === e.camera_id)?.kind === "hub_clips";
+  const mainButton = $("#viewer-main");
+  mainButton.hidden = !(onHub && e.clip_url && !e.active);
+  mainButton.textContent = full ? "Stored clip" : "Full resolution";
   if (e.clip_url) {
-    const src = `${API}/events/${e.id}/clip.mp4`;
+    const src = `${API}/events/${e.id}/${full ? "main" : "clip"}.mp4`;
     if (fresh || !video.src.endsWith(src)) {
       video.src = src;
       video.play().catch(() => {});
@@ -607,6 +637,7 @@ function renderFeedback(e) {
   $("#viewer-wrong").hidden = !!f;
   $("#viewer-undo-wrong").hidden = !f;
   $("#viewer-rename").hidden = !(e.label === "animal" && e.clip_url && !e.active);
+  $("#viewer-delete").hidden = !!e.active;
 }
 
 function openWrongForm() {
@@ -680,6 +711,34 @@ async function nameAgain() {
   } finally {
     button.disabled = false;
   }
+}
+
+// Switches the viewer between the stored clip and the full-resolution recording on the Hub.
+function toggleMain() {
+  const e = state.events.get(state.viewing);
+  if (!e) return;
+  const full = state.mainFor !== e.id;
+  state.mainFor = full ? e.id : null;
+  $("#viewer-action-status").textContent = full ? "Fetching the recording from the Hub…" : "";
+  renderViewer(e);
+}
+
+// The full-resolution recording did not play: say why and go back to the stored clip.
+async function mainFailed() {
+  const id = state.mainFor;
+  if (id === null || id !== state.viewing) return;
+  let why = "this browser cannot play it (H.265)";
+  try {
+    const res = await fetch(`${API}/events/${id}/main.mp4`, { headers: { Range: "bytes=0-1" } });
+    if (!res.ok) why = (await res.json()).error;
+  } catch (_) {
+    why = "Zoologist did not answer";
+  }
+  if (state.mainFor !== id) return;
+  state.mainFor = null;
+  const e = state.events.get(id);
+  if (e) renderViewer(e);
+  $("#viewer-action-status").textContent = `No full-resolution recording: ${why}.`;
 }
 
 async function refreshViewer(id) {
@@ -849,8 +908,14 @@ async function refreshCameraCounts() {
 
 /// Plays a camera's live stream: fragmented MP4 from the server, fed to MediaSource and kept
 /// close to the live edge.
-async function openLive(camera) {
+async function openLive(camera, full = false) {
   closeLive();
+  // A camera whose live view is a small stream can show its full-resolution one instead.
+  const fullButton = $("#live-full");
+  fullButton.hidden = !camera.full;
+  fullButton.textContent = full ? "Normal view" : "Full resolution";
+  fullButton.onclick = () => openLive(camera, !full);
+  turnLive(0);
   const dialog = $("#live-view");
   const video = $("#live-video");
   const note = $("#live-note");
@@ -868,13 +933,13 @@ async function openLive(camera) {
     if (state.live !== session) return;
     video.hidden = true;
     note.hidden = false;
-    note.textContent = text;
+    note.textContent = full ? `Full resolution: ${text}` : text;
     status.textContent = "not available";
   };
 
   let res;
   try {
-    res = await fetch(`${API}/cameras/${encodeURIComponent(camera.id)}/live.mp4`, { signal: controller.signal });
+    res = await fetch(`${API}/cameras/${encodeURIComponent(camera.id)}/live.mp4${full ? "?full=1" : ""}`, { signal: controller.signal });
   } catch (e) {
     if (e.name !== "AbortError") fail(`Cannot connect: ${e.message}`);
     return;
@@ -934,6 +999,14 @@ async function openLive(camera) {
     }
   };
   buffer.addEventListener("updateend", pump);
+  if (full) {
+    video.addEventListener("loadedmetadata", () => {
+      if (state.live !== session) return;
+      const sideways = video.videoHeight > video.videoWidth;
+      turnLive(camera.full_rotate ?? (sideways ? 270 : 0));
+    }, { signal: controller.signal });
+    video.addEventListener("error", () => fail("this browser could not play the stream."), { signal: controller.signal });
+  }
   video.play().catch(() => {});
 
   const reader = res.body.getReader();
@@ -944,7 +1017,7 @@ async function openLive(camera) {
       if (done || state.live !== session) break;
       if (first) {
         first = false;
-        status.textContent = "live";
+        status.textContent = full ? `live · full resolution` : "live";
       }
       queue.push(value);
       pump();
@@ -953,7 +1026,25 @@ async function openLive(camera) {
     if (e.name === "AbortError") return;
   }
   // The server ended the stream (e.g. the camera reconnected with new settings): start again.
-  if (state.live === session && dialog.open) setTimeout(() => state.live === session && openLive(camera), 1000);
+  if (state.live === session && dialog.open) setTimeout(() => state.live === session && openLive(camera, full), 1000);
+}
+
+/// Shows the live video turned by `degrees` clockwise (0 undoes it). A quarter turn swaps the
+/// video's sides, so its box is sized from the other side and centred in the stage.
+function turnLive(degrees) {
+  const stage = $("#live-stage");
+  const video = $("#live-video");
+  const quarter = degrees === 90 || degrees === 270;
+  stage.classList.toggle("turned", quarter);
+  if (quarter && video.videoWidth && video.videoHeight) {
+    stage.style.aspectRatio = `${video.videoHeight} / ${video.videoWidth}`;
+    video.style.width = `${(100 * video.videoWidth) / video.videoHeight}%`;
+    video.style.transform = `translate(-50%, -50%) rotate(${degrees}deg)`;
+  } else {
+    stage.style.aspectRatio = "";
+    video.style.width = "";
+    video.style.transform = degrees ? `rotate(${degrees}deg)` : "";
+  }
 }
 
 function closeLive() {
@@ -1092,6 +1183,12 @@ async function init() {
   $("#viewer-wrong").addEventListener("click", openWrongForm);
   $("#viewer-undo-wrong").addEventListener("click", undoWrong);
   $("#viewer-rename").addEventListener("click", nameAgain);
+  $("#viewer-main").addEventListener("click", toggleMain);
+  $("#viewer-delete").addEventListener("click", () => deleteEvent(state.viewing));
+  $("#viewer-video").addEventListener("error", mainFailed);
+  $("#viewer-video").addEventListener("loadeddata", () => {
+    if (state.mainFor === state.viewing && state.mainFor !== null) $("#viewer-action-status").textContent = "";
+  });
   $("#wrong-form").addEventListener("submit", saveWrong);
   $("#wrong-form").addEventListener("change", syncWrongForm);
   $("#wrong-cancel").addEventListener("click", () => {

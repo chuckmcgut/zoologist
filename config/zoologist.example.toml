@@ -162,6 +162,12 @@ transport = "rtsp"
 hub = "home-hub"
 detect_url = "rtsp://192.168.1.10:554/h264Preview_01_sub"
 record_url = "rtsp://192.168.1.10:554/h264Preview_01_sub"
+# The live view gets a "Full resolution" button that opens the main stream (H.265 plays in Safari and
+# Chromium browsers) only while someone watches. For a Reolink address ending in _sub that is the same
+# address with _main; for other cameras, name it:
+# full_url = "rtsp://192.168.1.10:554/h265Preview_01_main"
+# full_rotate = 270   # degrees clockwise to show it upright; default: 270 for a stream taller than wide
+#                     # (Reolink panorama cameras send their main stream on its side), else 0
 
 # --- Reolink battery camera behind the Home Hub (no live stream) ---
 [[cameras]]

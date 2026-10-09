@@ -440,6 +440,16 @@ pub struct CameraConfig {
     pub detect_url: Option<String>,
     /// `kind = "stream"` only: main stream that is recorded.
     pub record_url: Option<String>,
+    /// `kind = "stream"` only: the camera's full-resolution stream (RTSP, may be H.265), for the
+    /// live view's "Full resolution" button. It is opened only while someone watches it.
+    /// Default: see [`CameraConfig::full_stream_url`].
+    #[serde(default)]
+    pub full_url: Option<String>,
+    /// Degrees (0, 90, 180 or 270, clockwise) the live view turns the full-resolution stream
+    /// to show it upright. Default: a stream that is taller than wide is turned by 270, which
+    /// is how Reolink panorama cameras send their main stream.
+    #[serde(default)]
+    pub full_rotate: Option<u16>,
     #[serde(default = "default_detect_fps")]
     pub detect_fps: u32,
     #[serde(default = "yes")]
@@ -508,7 +518,7 @@ impl Config {
             else {
                 continue;
             };
-            for url in [&mut cam.detect_url, &mut cam.record_url]
+            for url in [&mut cam.detect_url, &mut cam.record_url, &mut cam.full_url]
                 .into_iter()
                 .flatten()
             {
@@ -813,6 +823,52 @@ fn validate_stream_camera(
             Some(_) => {}
         }
     }
+    if let Some(degrees) = cam.full_rotate
+        && ![0, 90, 180, 270].contains(&degrees)
+    {
+        err(format!(
+            "camera {id:?}: full_rotate must be 0, 90, 180 or 270, got {degrees}"
+        ));
+    }
+    if let Some(url) = &cam.full_url
+        && !url.starts_with("rtsp://")
+        && !url.starts_with("rtsps://")
+    {
+        err(format!(
+            "camera {id:?}: full_url must start with rtsp:// or rtsps://, got {}",
+            redact_url(url)
+        ));
+    }
+}
+
+impl CameraConfig {
+    /// The stream the live view shows: the record stream, or the detect stream of a camera
+    /// that does not record.
+    pub fn live_url(&self) -> Option<&str> {
+        if self.record {
+            self.record_url.as_deref()
+        } else {
+            self.detect_url.as_deref()
+        }
+    }
+
+    /// The full-resolution stream for the live view, when it is not what the live view shows
+    /// anyway: `full_url`, or for a Reolink address that ends in `_sub` (the usual choice when
+    /// the main stream is H.265) the same address with `_main`.
+    pub fn full_stream_url(&self) -> Option<String> {
+        if self.kind != CameraKind::Stream {
+            return None;
+        }
+        let live = self.live_url()?;
+        let full = match &self.full_url {
+            Some(url) => url.clone(),
+            None => {
+                let base = live.strip_suffix("_sub")?;
+                base.contains("Preview_").then(|| format!("{base}_main"))?
+            }
+        };
+        (full != live).then_some(full)
+    }
 }
 
 /// `^[a-z0-9_-]+$`
@@ -898,6 +954,42 @@ mod tests {
         assert_eq!(config.cameras[3].hub.as_deref(), Some("home-hub"));
         assert_eq!(config.cameras[4].kind, CameraKind::HubClips);
         assert_eq!(config.cameras[0].labels, Label::ALL.to_vec());
+    }
+
+    #[test]
+    fn the_full_resolution_stream_is_the_main_stream_of_a_sub_address() {
+        let mut cam = example().cameras[1].clone();
+        cam.kind = CameraKind::Stream;
+        cam.record = true;
+        cam.full_url = None;
+        cam.record_url = Some("rtsp://u:p@192.168.1.10:554/h264Preview_01_sub".into());
+        cam.detect_url = cam.record_url.clone();
+        assert_eq!(
+            cam.full_stream_url().as_deref(),
+            Some("rtsp://u:p@192.168.1.10:554/h264Preview_01_main")
+        );
+        // Written out, it wins.
+        cam.full_url = Some("rtsp://192.168.1.10:554/h265Preview_01_main".into());
+        assert_eq!(cam.full_stream_url(), cam.full_url);
+        // The live view already shows the main stream, or the address says nothing.
+        cam.full_url = None;
+        cam.record_url = Some("rtsp://192.168.1.10:554/h264Preview_01_main".into());
+        assert_eq!(cam.full_stream_url(), None);
+        cam.record_url = Some("rtsp://10.0.0.5:554/video2/stream0".into());
+        assert_eq!(cam.full_stream_url(), None);
+        // A camera that does not record shows its detect stream.
+        cam.record = false;
+        cam.detect_url = Some("rtsp://192.168.1.10:554/Preview_02_sub".into());
+        assert_eq!(
+            cam.full_stream_url().as_deref(),
+            Some("rtsp://192.168.1.10:554/Preview_02_main")
+        );
+        cam.kind = CameraKind::HubClips;
+        assert_eq!(
+            cam.full_stream_url(),
+            None,
+            "battery cameras are never streamed"
+        );
     }
 
     #[test]

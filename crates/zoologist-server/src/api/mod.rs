@@ -33,13 +33,14 @@ pub fn router(app: AppState) -> Router {
         .route("/cameras/{id}/latest.jpg", get(events::latest_jpg))
         .route("/cameras/{id}/live.mp4", get(events::live_mp4))
         .route("/events", get(events::list))
-        .route("/events/{id}", get(events::get_one))
+        .route("/events/{id}", get(events::get_one).delete(events::delete))
         .route(
             "/events/{id}/feedback",
             post(events::set_feedback).delete(events::clear_feedback),
         )
         .route("/events/{id}/reclassify", post(events::reclassify))
         .route("/events/{id}/clip.mp4", get(events::clip))
+        .route("/events/{id}/main.mp4", get(events::main_recording))
         .route("/events/{id}/snapshot.jpg", get(events::snapshot))
         .route("/events/{id}/thumb.jpg", get(events::thumb))
         .route("/events/{id}/sharp.jpg", get(events::sharp))

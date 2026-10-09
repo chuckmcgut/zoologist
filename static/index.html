@@ -114,6 +114,8 @@
       <button type="button" id="viewer-wrong" class="button">✗ Wrong</button>
       <button type="button" id="viewer-undo-wrong" class="button" hidden>Undo “wrong”</button>
       <button type="button" id="viewer-rename" class="button" hidden title="Run the species classifier on this clip again">Name again</button>
+      <button type="button" id="viewer-main" class="button" hidden title="Play the camera's full-resolution recording from the Hub, while the Hub still has it">Full resolution</button>
+      <button type="button" id="viewer-delete" class="button danger" title="Delete this event, its clip and its pictures">Delete</button>
       <span id="viewer-action-status" class="muted small" role="status"></span>
     </div>
     <form id="wrong-form" class="wrong-form" hidden>
@@ -150,8 +152,9 @@
   <dialog id="live-view" aria-labelledby="live-title">
     <form method="dialog" class="viewer-close"><button aria-label="Close">×</button></form>
     <h3 id="live-title"></h3>
-    <p id="live-meta" class="muted"><span class="live-dot">LIVE</span> <span id="live-status">connecting…</span></p>
-    <video id="live-video" muted autoplay playsinline></video>
+    <p id="live-meta" class="muted"><span class="live-dot">LIVE</span> <span id="live-status">connecting…</span>
+      <button type="button" id="live-full" class="button" hidden title="Switch between the stream Zoologist watches and the camera's full-resolution stream">Full resolution</button></p>
+    <div id="live-stage"><video id="live-video" muted autoplay playsinline></video></div>
     <p id="live-note" class="note" hidden></p>
   </dialog>
 </body>

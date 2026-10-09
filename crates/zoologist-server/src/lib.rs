@@ -9,6 +9,7 @@ pub mod demo;
 pub mod disk;
 pub mod healthcheck;
 pub mod hub_import;
+pub mod hub_main;
 pub mod hub_test;
 pub mod janitor;
 pub mod live;

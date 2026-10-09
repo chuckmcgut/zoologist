@@ -766,3 +766,77 @@ async fn the_sharp_view_is_served_when_there_is_one() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
 }
+
+async fn delete(app: &AppState, uri: &str) -> (StatusCode, serde_json::Value) {
+    let res = router(app.clone())
+        .oneshot(Request::delete(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn an_event_is_deleted_with_its_files() {
+    let f = fixture();
+    let fox = insert_fox(&f.app);
+    let mut live = f.app.events.subscribe();
+    let uri = format!("/api/v1/events/{fox}");
+    let (status, body) = delete(&f.app, &uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["deleted"], fox);
+    assert!(f.app.store.get_event(fox).unwrap().is_none());
+    for rel in ["clips/1.mp4", "clips/1.jpg"] {
+        assert!(!f.app.data_dir.join(rel).exists(), "{rel} is gone");
+    }
+    assert!(matches!(live.try_recv(), Ok(ApiEvent::Removed(r)) if r.id == fox));
+    let (status, _) = delete(&f.app, &uri).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "already gone");
+}
+
+#[tokio::test]
+async fn a_recording_shared_by_two_events_stays_until_the_last_is_deleted() {
+    let f = fixture();
+    std::fs::create_dir_all(f.app.data_dir.join("clips/hub")).unwrap();
+    std::fs::write(f.app.data_dir.join("clips/hub/a.mp4"), b"recording").unwrap();
+    let mut ids = Vec::new();
+    for label in [Label::Animal, Label::Vehicle] {
+        let e = f.app.store.insert_event(&new_event(label, 30)).unwrap();
+        let patch = EventPatch {
+            ended_at: Some(Utc::now() - Duration::minutes(29)),
+            clip_state: Some(ClipState::Ready),
+            clip_path: Some(Some("clips/hub/a.mp4".into())),
+            ..Default::default()
+        };
+        f.app.store.update_event(e.id, &patch).unwrap();
+        ids.push(e.id);
+    }
+    let (status, _) = delete(&f.app, &format!("/api/v1/events/{}", ids[0])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        f.app.data_dir.join("clips/hub/a.mp4").exists(),
+        "still used"
+    );
+    let (status, _) = delete(&f.app, &format!("/api/v1/events/{}", ids[1])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!f.app.data_dir.join("clips/hub/a.mp4").exists());
+}
+
+#[tokio::test]
+async fn an_event_that_is_still_going_on_is_not_deleted() {
+    let f = fixture();
+    let open = f
+        .app
+        .store
+        .insert_event(&new_event(Label::Person, 1))
+        .unwrap()
+        .id;
+    let (status, body) = delete(&f.app, &format!("/api/v1/events/{open}")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("still going on"));
+    assert!(f.app.store.get_event(open).unwrap().is_some());
+}

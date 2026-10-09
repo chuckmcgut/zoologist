@@ -41,6 +41,9 @@ pub async fn cameras(State(app): State<AppState>) -> Json<serde_json::Value> {
                 },
                 "labels": c.labels,
                 "record": c.record && c.kind == CameraKind::Stream,
+                // The live view can switch to a sharper stream than the one it shows.
+                "full": c.full_stream_url().is_some(),
+                "full_rotate": c.full_rotate,
                 "hub": c.hub,
             })
         })
@@ -81,7 +84,16 @@ pub async fn latest_jpg(
 
 /// `GET /cameras/{id}/live.mp4`: the camera's live video as fragmented MP4, for the browser's
 /// MediaSource. The `X-Codec` header carries the codec string (e.g. `avc1.64001f`).
-pub async fn live_mp4(State(app): State<AppState>, Path(id): Path<String>) -> ApiResult<Response> {
+///
+/// `?full=1` asks for the camera's full-resolution stream instead (see [`full_live`]).
+pub async fn live_mp4(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<LiveParams>,
+) -> ApiResult<Response> {
+    if params.full.is_some_and(|v| v != "0" && v != "false") {
+        return full_live(&app, &id).await;
+    }
     let camera = app
         .camera(&id)
         .ok_or_else(|| ApiError::not_found(format!("no live camera {id:?}")))?;
@@ -90,12 +102,88 @@ pub async fn live_mp4(State(app): State<AppState>, Path(id): Path<String>) -> Ap
         .subscribe()
         .ok_or_else(|| ApiError::not_found("no video from the camera yet"))?;
     let codec = codec_string(&info).ok_or_else(|| {
-        ApiError::bad_request("this camera sends H.265, which browsers cannot play live")
+        ApiError::bad_request("the camera's stream cannot be described to a browser")
     })?;
     let stream = viewer_stream(info, gop, rx)
         .map_err(|e| ApiError::bad_request(format!("cannot start live view: {e}")))?;
     let shutdown = app.shutdown.clone();
     let stream = stream.take_until(async move { shutdown.cancelled().await });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "video/mp4".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::HeaderName::from_static("x-codec"), codec),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct LiveParams {
+    full: Option<String>,
+}
+
+/// Full-resolution streams open at once: each is its own connection to the camera (or its Hub).
+static FULL_VIEWERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+/// How long the full-resolution stream may take to start.
+const FULL_START: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The camera's full-resolution stream (often H.265), which Zoologist neither records nor
+/// analyses: it is opened for this viewer and closed when they leave.
+async fn full_live(app: &AppState, id: &str) -> ApiResult<Response> {
+    use axum::http::StatusCode;
+    use zoologist_video::stream::StreamItem;
+    let url = app
+        .config
+        .cameras
+        .iter()
+        .find(|c| c.id == id && c.enabled)
+        .and_then(|c| c.full_stream_url())
+        .ok_or_else(|| ApiError::not_found("this camera has no separate full-resolution stream"))?;
+    let permit = FULL_VIEWERS.try_acquire().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "two full-resolution streams are open already".into(),
+        )
+    })?;
+    let cancel = app.shutdown.child_token();
+    let stop = cancel.clone().drop_guard();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    let status = zoologist_video::source::SharedStatus::default();
+    zoologist_video::source::spawn_rtsp_stream(
+        format!("{id}/full"),
+        url,
+        tx,
+        status.clone(),
+        cancel,
+    );
+    let first = tokio::time::timeout(FULL_START, async {
+        loop {
+            match rx.recv().await {
+                Some(StreamItem::Info(info)) => return Some(info),
+                Some(StreamItem::Unit(_)) => {}
+                None => return None,
+            }
+        }
+    })
+    .await;
+    let Ok(Some(info)) = first else {
+        let why = status
+            .read()
+            .ok()
+            .and_then(|s| s.last_error.clone())
+            .unwrap_or_else(|| "no video within 15 s".into());
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            format!("the full-resolution stream did not start: {why}"),
+        ));
+    };
+    let codec = codec_string(&info).ok_or_else(|| {
+        ApiError::bad_request("the camera's stream cannot be described to a browser")
+    })?;
+    let stream = crate::live::direct_stream(info, rx, (stop, permit))
+        .map_err(|e| ApiError::bad_request(format!("cannot start live view: {e}")))?;
     Ok((
         [
             (header::CONTENT_TYPE, "video/mp4".to_string()),
@@ -254,6 +342,50 @@ pub async fn set_feedback(
     Ok(Json(save(&app, record.id, patch).await?))
 }
 
+/// `DELETE /events/{id}`: removes the event with its pictures and its clip.
+pub async fn delete(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let record = load(&app, &id).await?;
+    if record.ended_at.is_none() {
+        return Err(ApiError::bad_request(
+            "the event is still going on: delete it when it has ended",
+        ));
+    }
+    let id = record.id;
+    // A Hub recording is the clip of every event found in it: it stays while another event
+    // still shows it.
+    let (clip, at) = (record.clip_path.clone(), record.started_at);
+    let hour = chrono::Duration::hours(1);
+    let clip_shared = app
+        .store
+        .call(move |s| {
+            let near = s.events_between(at - hour, Some(at + hour))?;
+            Ok(clip.is_some() && near.iter().any(|e| e.id != id && e.clip_path == clip))
+        })
+        .await?;
+    if !app.store.call(move |s| s.delete_event(id)).await? {
+        return Err(ApiError::not_found(format!("no event {id}")));
+    }
+    let clip = record.clip_path.as_ref().filter(|_| !clip_shared);
+    for rel in [
+        clip,
+        record.snapshot_path.as_ref(),
+        record.thumb_path.as_ref(),
+        record.sharp_path.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let _ = tokio::fs::remove_file(app.data_dir.join(rel)).await;
+    }
+    let _ = tokio::fs::remove_file(crate::hub_main::cached(&app.data_dir, id)).await;
+    tracing::info!(event = id, camera = %record.camera_id, label = %record.label, "event deleted by the user");
+    app.publish(ApiEvent::Removed(record));
+    Ok(Json(serde_json::json!({ "deleted": id })))
+}
+
 /// `DELETE /events/{id}/feedback`: takes the "wrong" mark back.
 pub async fn clear_feedback(
     State(app): State<AppState>,
@@ -363,6 +495,29 @@ pub async fn clip(
 ) -> ApiResult<Response> {
     let record = load(&app, &id).await?;
     serve_file(&app, record.clip_path.as_deref(), "video/mp4", req).await
+}
+
+/// `GET /events/{id}/main.mp4`: the full-resolution recording of a battery camera's event,
+/// fetched from the Hub when first asked for (see [`crate::hub_main`]).
+pub async fn main_recording(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    req: Request,
+) -> ApiResult<Response> {
+    use crate::hub_main::MainError;
+    let record = load(&app, &id).await?;
+    let path = crate::hub_main::fetch(&app, &record).await.map_err(|e| {
+        let status = match e {
+            MainError::NotOnHub(_) | MainError::Gone => axum::http::StatusCode::NOT_FOUND,
+            MainError::Hub(_) => axum::http::StatusCode::BAD_GATEWAY,
+        };
+        ApiError(status, e.to_string())
+    })?;
+    let response = ServeFile::new_with_mime(path, &"video/mp4".parse().expect("valid mime"))
+        .oneshot(req)
+        .await
+        .map_err(|_| ApiError::not_found("cannot read file"))?;
+    Ok(response.map(Body::new))
 }
 
 /// `GET /events/{id}/snapshot.jpg`

@@ -92,6 +92,49 @@ impl LiveFeed {
     }
 }
 
+/// The byte stream for the one viewer of a stream that was opened for them (a camera's
+/// full-resolution stream): the MP4 header, then fragments from the first keyframe on. It ends
+/// when the source reconnects or stops (the browser asks again). `keep` lives as long as the
+/// viewer stays; dropping it is what stops the source.
+pub fn direct_stream<K: Send + 'static>(
+    info: StreamInfo,
+    rx: mpsc::Receiver<StreamItem>,
+    keep: K,
+) -> std::io::Result<impl Stream<Item = Result<Bytes, std::io::Error>>> {
+    struct State<K> {
+        header: Option<Bytes>,
+        rx: mpsc::Receiver<StreamItem>,
+        frag: Fragmenter,
+        need_key: bool,
+        _keep: K,
+    }
+    let state = State {
+        header: Some(Bytes::from(fragmented_init(&info)?)),
+        rx,
+        frag: Fragmenter::new(),
+        need_key: true,
+        _keep: keep,
+    };
+    Ok(futures_util::stream::unfold(state, |mut s| async move {
+        if let Some(header) = s.header.take() {
+            return Some((Ok(header), s));
+        }
+        loop {
+            match s.rx.recv().await {
+                Some(StreamItem::Unit(unit)) => {
+                    if s.need_key && !unit.is_keyframe {
+                        continue;
+                    }
+                    s.need_key = false;
+                    let bytes = s.frag.fragment(&unit);
+                    return Some((Ok(bytes), s));
+                }
+                Some(StreamItem::Info(_)) | None => return None,
+            }
+        }
+    }))
+}
+
 /// Forwards `input` to `output`, showing every item to `feed` on the way. Ends when either side
 /// closes.
 pub fn tee(

@@ -450,3 +450,45 @@ narrow one down.
   the event viewer above the snapshot. It is removed with the event's other pictures.
 - **Limits.** Only where sharp views exist (`species.snapshots`, cameras behind a Hub) and only when
   the detector finds the animal again in the sharp picture. Events stored earlier get none.
+
+## 34. 2026-10-09: The full-resolution recording, straight from the Hub
+
+- **Problem.** A battery camera's stored clip is the sub stream (1536×432 on the owner's cameras). The
+  Hub also holds the main recording (H.265, 5120×1440), and the owner's browsers (Safari, Arc) play
+  H.265.
+- **Decision.** `GET /events/{id}/main.mp4` fetches the main recording from the Hub when it is asked
+  for, and the event viewer has a "Full resolution" button for battery cameras. Nothing is converted.
+- **Why not store it.** It is about five times the size of the sub clip, and most events are never
+  watched. Fetching one took 2 s for a 14 s recording on the owner's Hub.
+- **Why not pass it through.** Browsers ask for byte ranges of a video (Safari will not play without
+  them), and the Hub's download cannot give them. So the file is kept in `tmp/main/` for an hour and
+  served from there.
+- **Limits.** Only while the Hub still has the recording, and only in browsers that play H.265; the
+  viewer says so and goes back to the stored clip. Not for live cameras on a Hub: the Hub records those
+  in hour-long files, far too large to fetch for one event.
+
+## 35. 2026-10-09: Deleting an event
+
+- **Decision.** `DELETE /events/{id}`, a "Delete" button in the event viewer and a × on each tile of the
+  event list. The page asks first. The event goes for good, with its pictures and its clip.
+- **Shared recordings.** One Hub recording is the clip of every event found in it, so it stays until
+  the last of them is deleted.
+- **Not while it happens.** An event that has not ended is refused: the writer still updates it.
+- **Other web pages.** Cross-origin requests are allowed for `GET` only, so another page cannot delete
+  events through the owner's browser.
+
+## 36. 2026-10-09: The live view at full resolution
+
+- **Problem.** A camera whose main stream is H.265 is recorded and shown from its sub stream. The
+  owner's browsers play H.265, and the live view refused it.
+- **Decision.** The live view has a "Full resolution" button for a camera whose live picture is not
+  its main stream. `GET /cameras/{id}/live.mp4?full=1` opens the main stream for that viewer and
+  closes it when they leave. It is passed on as it comes, not decoded, recorded or analysed.
+- **Which stream.** `full_url`, or for a Reolink address ending in `_sub` the same address with
+  `_main`. A camera that already shows its main stream gets no button.
+- **Why not record the main stream.** 11 Mbit/s around the clock for the owner's panorama camera,
+  for a picture that is looked at now and then.
+- **Sideways.** That camera sends its main stream as 2160×7680, turned a quarter. The page turns a
+  stream that is taller than wide by 270° (`full_rotate` overrides this).
+- **Limits.** At most two such streams at once, each its own connection to the camera or Hub. retina's
+  `h265` feature is on for this; it is Rust only.

@@ -311,7 +311,32 @@ pub fn codec_string(info: &StreamInfo) -> Option<String> {
             let c = &info.decoder_config;
             (c.len() >= 4).then(|| format!("avc1.{:02x}{:02x}{:02x}", c[1], c[2], c[3]))
         }
-        Codec::H265 => None,
+        // ISO/IEC 14496-15 annex E, from the hvcC record: profile space and profile, the
+        // compatibility flags with their bits reversed, tier and level, then the constraint
+        // bytes up to the last one that is not zero. E.g. `hvc1.1.6.L153.B0`.
+        Codec::H265 => {
+            let c = &info.decoder_config;
+            if c.len() < 13 {
+                return None;
+            }
+            let space = ["", "A", "B", "C"][usize::from(c[1] >> 6)];
+            let tier = if c[1] & 0x20 != 0 { 'H' } else { 'L' };
+            let compatibility = u32::from_be_bytes([c[2], c[3], c[4], c[5]]).reverse_bits();
+            let mut text = format!(
+                "hvc1.{space}{}.{compatibility:X}.{tier}{}",
+                c[1] & 0x1f,
+                c[12]
+            );
+            let constraints = &c[6..12];
+            let used = constraints
+                .iter()
+                .rposition(|b| *b != 0)
+                .map_or(0, |i| i + 1);
+            for byte in &constraints[..used] {
+                text.push_str(&format!(".{byte:X}"));
+            }
+            Some(text)
+        }
     }
 }
 
@@ -400,4 +425,34 @@ fn stbl(info: &StreamInfo, samples: &[SampleIndexEntry], first_offset: u64) -> i
         ]
         .concat(),
     ))
+}
+
+#[cfg(test)]
+mod codec_string_tests {
+    use bytes::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn an_h265_stream_is_named_from_its_hvcc_record() {
+        // Main profile, main tier, level 5.1 (153), progressive and frame-only (0xB0).
+        let mut hvcc = vec![1, 0x01, 0x60, 0, 0, 0, 0xB0, 0, 0, 0, 0, 0, 153];
+        hvcc.extend_from_slice(&[0; 10]);
+        let info = |config: Vec<u8>| StreamInfo {
+            codec: Codec::H265,
+            width: 7680,
+            height: 2160,
+            decoder_config: Bytes::from(config),
+        };
+        assert_eq!(
+            codec_string(&info(hvcc.clone())).as_deref(),
+            Some("hvc1.1.6.L153.B0")
+        );
+        // High tier, Main 10, no constraint bytes.
+        hvcc[1] = 0x22;
+        hvcc[2] = 0x20;
+        hvcc[6] = 0;
+        assert_eq!(codec_string(&info(hvcc)).as_deref(), Some("hvc1.2.4.H153"));
+        assert_eq!(codec_string(&info(vec![1, 1, 0x60])), None, "too short");
+    }
 }
