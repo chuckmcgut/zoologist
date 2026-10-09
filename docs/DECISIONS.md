@@ -438,3 +438,15 @@ narrow one down.
   a species typed in with the mark replaces the classifier's. `/stats/species` still ignores marks.
 - **Limit.** The counts are events, not animals: one deer that passes three cameras is counted three times.
 
+
+## 33. 2026-10-09: Keep the sharp view of an animal
+
+- **Problem.** The sharp, full-resolution views an animal is named from were thrown away after naming.
+  The dashboard showed only the small sub stream, so a named animal could not be checked by eye: a
+  coyote at dawn was a blur, and whether it was a wolf could only be settled by fetching the main
+  recording from the Hub by hand.
+- **Decision.** The best sharp view (the area around the animal, at the main stream's resolution) is
+  kept with the event as `sharp/<date>/<id>.jpg`, served at `GET /events/{id}/sharp.jpg` and shown in
+  the event viewer above the snapshot. It is removed with the event's other pictures.
+- **Limits.** Only where sharp views exist (`species.snapshots`, cameras behind a Hub) and only when
+  the detector finds the animal again in the sharp picture. Events stored earlier get none.

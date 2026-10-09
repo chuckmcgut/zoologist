@@ -520,6 +520,7 @@ impl Importer {
                         bbox: c.bbox,
                         score: crop.score,
                         quality: c.quality,
+                        sharp: true,
                     });
                 }
             }
@@ -620,6 +621,7 @@ mod tests {
             bbox: BBox::new(0.1, 0.1, 0.5, 0.5),
             score,
             quality: score,
+            sharp: false,
         };
         vec![
             EventUpdate::Started {

@@ -64,14 +64,16 @@ fn event(dir: &Path, store: &Store, label: Label, hours_ago: i64, clip_bytes: us
         })
         .unwrap();
     let date = started_at.format("%Y-%m-%d");
-    let (clip, snap, thumb) = (
+    let (clip, snap, thumb, sharp) = (
         format!("clips/{date}/{}.mp4", e.id),
         format!("snapshots/{date}/{}.jpg", e.id),
         format!("thumbs/{date}/{}.jpg", e.id),
+        format!("sharp/{date}/{}.jpg", e.id),
     );
     write(dir, &clip, clip_bytes);
     write(dir, &snap, 50);
     write(dir, &thumb, 20);
+    write(dir, &sharp, 30);
     store
         .update_event(
             e.id,
@@ -82,6 +84,7 @@ fn event(dir: &Path, store: &Store, label: Label, hours_ago: i64, clip_bytes: us
                 clip_bytes: Some(Some(clip_bytes as u64)),
                 snapshot_path: Some(Some(snap)),
                 thumb_path: Some(Some(thumb)),
+                sharp_path: Some(Some(sharp)),
                 ..Default::default()
             },
         )
@@ -140,7 +143,13 @@ fn expired_events_lose_their_media_but_stay() {
     assert_eq!(after.clip_path, None);
     assert_eq!(after.snapshot_path, None);
     assert_eq!(after.thumb_path, None);
-    for rel in [before.clip_path, before.snapshot_path, before.thumb_path] {
+    assert_eq!(after.sharp_path, None);
+    for rel in [
+        before.clip_path,
+        before.snapshot_path,
+        before.thumb_path,
+        before.sharp_path,
+    ] {
         assert!(!dir.path().join(rel.unwrap()).exists());
     }
     assert_eq!(

@@ -739,3 +739,30 @@ async fn stream_replays_after_last_event_id() {
     assert_eq!(ids, ["2", "3", "4"]);
     assert_eq!(got[0].0, "started", "open events replay as started");
 }
+
+#[tokio::test]
+async fn the_sharp_view_is_served_when_there_is_one() {
+    let f = fixture();
+    let fox = insert_fox(&f.app);
+    let uri = format!("/api/v1/events/{fox}/sharp.jpg");
+    let (_, body) = get(&f.app, &format!("/api/v1/events/{fox}")).await;
+    assert_eq!(body["sharp_url"], serde_json::Value::Null);
+    let (status, _) = get(&f.app, &uri).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    std::fs::create_dir_all(f.app.data_dir.join("sharp")).unwrap();
+    std::fs::write(f.app.data_dir.join("sharp/1.jpg"), b"\xff\xd8sharp").unwrap();
+    let patch = EventPatch {
+        sharp_path: Some(Some("sharp/1.jpg".into())),
+        ..Default::default()
+    };
+    f.app.store.update_event(fox, &patch).unwrap();
+    let (_, body) = get(&f.app, &format!("/api/v1/events/{fox}")).await;
+    assert_eq!(body["sharp_url"], uri);
+    let res = router(f.app.clone())
+        .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
+}

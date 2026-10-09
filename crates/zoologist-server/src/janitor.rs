@@ -29,7 +29,7 @@ const FIRST_PASS: Duration = Duration::from_secs(30);
 /// Warn below this fraction of free space.
 const LOW_SPACE: f64 = 0.05;
 /// Media directories that are organised by date and can be pruned when empty.
-const MEDIA_DIRS: [&str; 4] = ["recordings", "clips", "snapshots", "thumbs"];
+const MEDIA_DIRS: [&str; 5] = ["recordings", "clips", "snapshots", "thumbs", "sharp"];
 
 /// What one pass did (or, in a dry run, would do).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -116,7 +116,7 @@ pub fn run_once(
     let clips_cutoff = now - chrono::Duration::days(i64::from(config.retention.clips_days));
     let epoch = DateTime::<Utc>::UNIX_EPOCH;
     for e in store.events_between(epoch, Some(clips_cutoff))? {
-        let paths: Vec<&String> = [&e.clip_path, &e.snapshot_path, &e.thumb_path]
+        let paths: Vec<&String> = [&e.clip_path, &e.snapshot_path, &e.thumb_path, &e.sharp_path]
             .into_iter()
             .flatten()
             .collect();
@@ -139,6 +139,7 @@ pub fn run_once(
                 clip_bytes: Some(None),
                 snapshot_path: Some(None),
                 thumb_path: Some(None),
+                sharp_path: Some(None),
                 ..Default::default()
             };
             store.update_event(e.id, &patch)?;

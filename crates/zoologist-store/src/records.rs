@@ -49,6 +49,9 @@ pub struct EventRecord {
     /// Paths are relative to the data directory.
     pub snapshot_path: Option<String>,
     pub thumb_path: Option<String>,
+    /// A full-resolution close-up of the animal, when the camera's main stream gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharp_path: Option<String>,
     pub clip_path: Option<String>,
     pub clip_bytes: Option<u64>,
     pub clip_state: ClipState,
@@ -84,6 +87,7 @@ pub struct EventPatch {
     pub species: Option<SpeciesGuess>,
     pub snapshot_path: Option<Option<String>>,
     pub thumb_path: Option<Option<String>>,
+    pub sharp_path: Option<Option<String>>,
     pub clip_path: Option<Option<String>>,
     pub clip_bytes: Option<Option<u64>>,
     pub clip_state: Option<ClipState>,
@@ -116,6 +120,9 @@ impl EventPatch {
         }
         if let Some(v) = &self.thumb_path {
             r.thumb_path = v.clone();
+        }
+        if let Some(v) = &self.sharp_path {
+            r.sharp_path = v.clone();
         }
         if let Some(v) = &self.clip_path {
             r.clip_path = v.clone();

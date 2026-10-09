@@ -46,6 +46,8 @@ Every route that returns events uses this shape: the stored record, plus links a
   "clip_url": "/api/v1/events/1/clip.mp4",          // null unless clip_state is ready
   "snapshot_url": "/api/v1/events/1/snapshot.jpg",
   "thumb_url": "/api/v1/events/1/thumb.jpg",
+  "sharp_path": "sharp/2026-09-19/1.jpg",          // only when there is a sharp close-up
+  "sharp_url": "/api/v1/events/1/sharp.jpg",        // null otherwise
   "active": false,
   "feedback": {                      // only when someone marked the event wrong
     "actual": null,                  // what was really there; null = nothing
@@ -210,6 +212,16 @@ returns the snapshot.
 ```sh
 curl -s -o snap.jpg $Z/events/1/snapshot.jpg
 curl -s -o thumb.jpg $Z/events/1/thumb.jpg
+```
+
+### `GET /events/{id}/sharp.jpg`
+
+A close-up of the animal at the camera's full resolution: the area around it in the main-stream picture
+the species was named from (`species.snapshots`; Hub cameras, with ffmpeg for battery cameras). 404 for
+events without one (`sharp_url` is `null`).
+
+```sh
+curl -s -o sharp.jpg $Z/events/1/sharp.jpg
 ```
 
 ## Charts

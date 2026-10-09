@@ -158,6 +158,7 @@ impl Store {
                 species: None,
                 snapshot_path: new.snapshot_path.clone(),
                 thumb_path: new.thumb_path.clone(),
+                sharp_path: None,
                 clip_path: None,
                 clip_bytes: None,
                 clip_state: ClipState::Pending,

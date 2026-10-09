@@ -440,6 +440,7 @@ mod tests {
             }),
             snapshot_path: None,
             thumb_path: None,
+            sharp_path: None,
             clip_path: Some("clips/1.mp4".into()),
             clip_bytes: None,
             clip_state: ClipState::Ready,

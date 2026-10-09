@@ -171,6 +171,7 @@ pub fn replay(
                                         bbox: c.bbox,
                                         score: crop.score,
                                         quality: c.quality,
+                                        sharp: true,
                                     });
                                 }
                             }

@@ -388,3 +388,13 @@ pub async fn thumb(
         .or(record.snapshot_path.as_deref());
     serve_file(&app, rel, "image/jpeg", req).await
 }
+
+/// `GET /events/{id}/sharp.jpg`: the animal's full-resolution close-up, when there is one.
+pub async fn sharp(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    req: Request,
+) -> ApiResult<Response> {
+    let record = load(&app, &id).await?;
+    serve_file(&app, record.sharp_path.as_deref(), "image/jpeg", req).await
+}

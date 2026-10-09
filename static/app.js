@@ -552,6 +552,16 @@ function renderViewer(e, fresh = false) {
       note.textContent = "Clip not available.";
     }
   }
+  // The animal's close-up from the camera's full-resolution picture, when there is one.
+  const sharp = $("#viewer-sharp");
+  if (e.sharp_url) {
+    sharp.src = `${API}/events/${e.id}/sharp.jpg`;
+    sharp.alt = `Close-up of ${eventTitle(e)}`;
+    sharp.hidden = false;
+  } else {
+    sharp.removeAttribute("src");
+    sharp.hidden = true;
+  }
   const img = $("#viewer-snapshot");
   if (e.snapshot_url) {
     img.src = `${API}/events/${e.id}/snapshot.jpg?v=${encodeURIComponent(e.best_bbox ? e.best_bbox.x1 : 0)}`;

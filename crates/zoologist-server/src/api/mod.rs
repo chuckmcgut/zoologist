@@ -42,6 +42,7 @@ pub fn router(app: AppState) -> Router {
         .route("/events/{id}/clip.mp4", get(events::clip))
         .route("/events/{id}/snapshot.jpg", get(events::snapshot))
         .route("/events/{id}/thumb.jpg", get(events::thumb))
+        .route("/events/{id}/sharp.jpg", get(events::sharp))
         .route("/stats/labels", get(stats::labels))
         .route("/stats/species", get(stats::species))
         .route("/stats/hourly", get(stats::hourly))
@@ -133,6 +134,7 @@ pub struct EventJson<'a> {
     pub clip_url: Option<String>,
     pub snapshot_url: Option<String>,
     pub thumb_url: Option<String>,
+    pub sharp_url: Option<String>,
     /// True while the event has not ended.
     pub active: bool,
 }
@@ -146,6 +148,7 @@ impl<'a> EventJson<'a> {
             clip_url: clip_ready.then(|| url("clip.mp4")),
             snapshot_url: record.snapshot_path.as_ref().map(|_| url("snapshot.jpg")),
             thumb_url: record.thumb_path.as_ref().map(|_| url("thumb.jpg")),
+            sharp_url: record.sharp_path.as_ref().map(|_| url("sharp.jpg")),
             active: record.ended_at.is_none(),
         }
     }

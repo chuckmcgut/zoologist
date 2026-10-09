@@ -130,6 +130,7 @@ async fn became_motion(app: &AppState, camera_id: &str, id: u64) {
         clip,
         record.snapshot_path.as_ref(),
         record.thumb_path.as_ref(),
+        record.sharp_path.as_ref(),
     ]
     .into_iter()
     .flatten()
@@ -242,6 +243,34 @@ async fn write_pictures(
         tracing::warn!(event = id, "could not write snapshot: {result:?}");
     }
     (snap, thumb)
+}
+
+/// Keeps the best sharp view of an animal as the event's close-up (`sharp/<date>/<id>.jpg`).
+async fn keep_sharp_view(
+    app: &AppState,
+    id: u64,
+    started_at: DateTime<Utc>,
+    views: &[SpeciesCrop],
+) {
+    let best = views
+        .iter()
+        .max_by(|a, b| a.quality.total_cmp(&b.quality))
+        .map(|c| c.frame.clone());
+    let Some(frame) = best else { return };
+    let rel = rel_path("sharp", started_at, app, id, "jpg");
+    let path = app.data_dir.join(&rel);
+    let written = tokio::task::spawn_blocking(move || write_snapshot(&frame, None, &path)).await;
+    if !matches!(written, Ok(Ok(()))) {
+        tracing::warn!(event = id, "could not write the sharp view: {written:?}");
+        return;
+    }
+    let patch = EventPatch {
+        sharp_path: Some(Some(rel)),
+        ..Default::default()
+    };
+    if let Ok(Some(record)) = app.store.call(move |s| s.update_event(id, &patch)).await {
+        app.publish(ApiEvent::Updated(record));
+    }
 }
 
 async fn handle(
@@ -407,14 +436,23 @@ async fn handle(
                 } else {
                     Check::Animal
                 };
+                // Sharp views the Hub importer took from the main recording.
+                let mut sharp_views: Vec<SpeciesCrop> = Vec::new();
                 let mut crops: Vec<SpeciesCrop> = crops
                     .into_iter()
-                    .map(|c| SpeciesCrop {
-                        frame: c.frame,
-                        bbox: c.bbox,
-                        quality: c.quality,
+                    .map(|c| {
+                        let crop = SpeciesCrop {
+                            frame: c.frame,
+                            bbox: c.bbox,
+                            quality: c.quality,
+                        };
+                        if c.sharp {
+                            sharp_views.push(crop.clone());
+                        }
+                        crop
                     })
                     .collect();
+                let started_at = o.started_at;
                 let snaps = std::mem::take(&mut o.snaps);
                 let species = species.clone();
                 let detector = app.detector.clone();
@@ -430,12 +468,16 @@ async fn handle(
                         if let (Ok(Some(snap)), Some(detector)) = (snap.await, &detector)
                             && let Some(crop) = snapshots::locate(detector, snap).await
                         {
+                            sharp_views.push(crop.clone());
                             crops.push(crop);
                             sharp += 1;
                         }
                     }
                     if sharp > 0 {
                         tracing::info!(event = id, sharp, "sharp views from snapshots");
+                    }
+                    if !person {
+                        keep_sharp_view(&app, id, started_at, &sharp_views).await;
                     }
                     let (tx, rx) = oneshot::channel();
                     species.submit(SpeciesJob {
@@ -675,5 +717,47 @@ mod spot_tests {
         let kept = app.store.get_event(stump).unwrap().expect("kept");
         assert_eq!(kept.label, Label::Motion);
         assert!(matches!(live.try_recv(), Ok(ApiEvent::Updated(r)) if r.id == stump));
+    }
+
+    /// The best of an animal's sharp views is kept as its close-up; without one nothing changes.
+    #[tokio::test]
+    async fn the_best_sharp_view_is_kept_with_the_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.server.data_dir = dir.path().to_path_buf();
+        let store = Store::open(&dir.path().join("db.redb"), config.station.timezone).unwrap();
+        let app = AppState::without_pipeline(config, store);
+        let view = |width: u32, quality: f32| SpeciesCrop {
+            frame: zoologist_core::Frame {
+                camera_id: "trail".into(),
+                seq: 0,
+                captured_at: Utc::now(),
+                width,
+                height: 32,
+                i420: std::sync::Arc::new(vec![128; (width * 32 * 3 / 2) as usize]),
+            },
+            bbox: BBox::new(0.2, 0.2, 0.8, 0.8),
+            quality,
+        };
+        let id = event(&app, "trail", BBox::new(0.4, 0.4, 0.5, 0.6));
+        let started_at = app.store.get_event(id).unwrap().unwrap().started_at;
+
+        keep_sharp_view(&app, id, started_at, &[]).await;
+        assert_eq!(app.store.get_event(id).unwrap().unwrap().sharp_path, None);
+
+        keep_sharp_view(&app, id, started_at, &[view(48, 0.3), view(64, 0.9)]).await;
+        let rel = app
+            .store
+            .get_event(id)
+            .unwrap()
+            .unwrap()
+            .sharp_path
+            .expect("sharp view kept");
+        assert!(
+            rel.starts_with("sharp/") && rel.ends_with(&format!("/{id}.jpg")),
+            "{rel}"
+        );
+        let picture = image::open(app.data_dir.join(&rel)).unwrap();
+        assert_eq!(picture.width(), 64, "the view with the best quality");
     }
 }

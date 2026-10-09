@@ -35,6 +35,9 @@ pub struct BestCrop {
     pub score: f32,
     /// `score × sqrt(area)`: prefers confident and large views.
     pub quality: f32,
+    /// A view from a full-resolution picture (`frame` is the area around the animal), not from
+    /// the analysed stream.
+    pub sharp: bool,
 }
 
 /// One object followed across frames.
@@ -464,6 +467,7 @@ fn add_crop(track: &mut Track, max_crops: usize, frame: &Frame, det: &Detection)
         bbox: det.bbox,
         score: det.score,
         quality: det.score * det.bbox.area().sqrt(),
+        sharp: false,
     };
     let previous_best = track.crops.first().map(|c| c.quality);
     let new_slot = slot(&crop.frame);

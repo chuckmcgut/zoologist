@@ -252,6 +252,12 @@ channel = 3
         "{downloaded:?}"
     );
     assert_eq!(fake.downloads.load(Ordering::SeqCst), downloaded.len());
+    // The fox's best sharp view is kept as the event's close-up.
+    let sharp = data
+        .path()
+        .join(fox.sharp_path.as_deref().expect("sharp view kept"));
+    let sharp = image::open(&sharp).expect("the sharp view is a picture");
+    assert!(sharp.width() >= 32 && sharp.height() >= 32);
     assert_eq!(health.imported, 1, "{health:?}");
     assert!(
         store.hub_import_seen("hub", "1-0-fox").unwrap(),

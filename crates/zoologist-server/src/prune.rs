@@ -62,7 +62,7 @@ pub fn prune_store(
         .filter(|e| filter.matches(e))
         .collect();
     for e in &chosen {
-        for rel in [&e.clip_path, &e.snapshot_path, &e.thumb_path]
+        for rel in [&e.clip_path, &e.snapshot_path, &e.thumb_path, &e.sharp_path]
             .into_iter()
             .flatten()
         {
