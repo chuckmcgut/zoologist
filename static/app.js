@@ -7,7 +7,7 @@ const PAGE = 48;
 const TOP_SPECIES = 12;
 const CHART_REFRESH_MS = 5000; // at most one chart refresh per 5 s from live updates
 const CLIP_POLL_MS = 3000;
-const CAMERA_REFRESH_MS = 10000;
+const CAMERA_REFRESH_MS = 20000;
 
 const LABELS = [
   { id: "person", name: "Person", icon: "🧍" },
@@ -18,6 +18,7 @@ const LABELS = [
 const LABEL = Object.fromEntries(LABELS.map((l) => [l.id, l]));
 
 const state = {
+  todayTotal: 0, // events today on all cameras, from the last chart refresh
   tz: undefined,
   window: "24h",
   camera: "",
@@ -156,13 +157,7 @@ async function loadHealth() {
   try {
     const h = await api("health");
     state.health = h;
-    let today = 0;
-    try {
-      const hourly = await api(`stats/hourly${query({ date: todayInStation() })}`);
-      today = hourly.hours.reduce((sum, x) => sum + x.person + x.vehicle + x.animal + x.motion, 0);
-    } catch (_) {
-      /* keep 0 */
-    }
+    const today = state.todayTotal;
     const watching = Math.max(state.cameras.length, h.cameras.length);
     const parts = [`Watching ${watching} camera${watching === 1 ? "" : "s"}`, `${fmt.number(today)} events today`];
     if (h.detector) parts.push(`detector ${Math.round(h.detector.mean_ms)} ms`);
@@ -209,10 +204,12 @@ function barRow({ name, title, count, max, fill, pressed, onClick, ariaLabel }) 
   );
 }
 
-async function loadActivity() {
+let labelsData = null;
+
+function renderActivity() {
   const container = $("#activity-chart");
-  try {
-    const data = await api(`stats/labels${query({ window: state.window, camera: state.camera })}`);
+  const data = labelsData;
+  {
     const max = Math.max(...data.items.map((i) => i.count));
     const grid = el("div", { class: "bars", role: "group", "aria-label": `Events per type in the last ${data.window}` });
     for (const item of data.items) {
@@ -229,22 +226,10 @@ async function loadActivity() {
     }
     container.replaceChildren(grid);
     if (max === 0) container.append(el("p", { class: "muted small" }, `Nothing seen in the last ${data.window}.`));
-  } catch (e) {
-    showMessage(container, `Could not load: ${e.message}`, true);
   }
 }
 
 let speciesData = null;
-
-async function loadSpeciesStats() {
-  try {
-    speciesData = await api(`stats/species${query({ window: state.window, camera: state.camera })}`);
-    renderAnimals();
-    renderSpeciesTable();
-  } catch (e) {
-    showMessage($("#animals-chart"), `Could not load: ${e.message}`, true);
-  }
-}
 
 function renderAnimals() {
   const container = $("#animals-chart");
@@ -532,7 +517,7 @@ function setLabelFilter(label) {
   state.species = "";
   syncChips();
   loadEvents();
-  loadActivity();
+  if (labelsData) renderActivity();
   if (speciesData) renderAnimals();
   $("#events-title").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -542,7 +527,7 @@ function setSpeciesFilter(species) {
   state.label = species ? "animal" : state.label;
   syncChips();
   loadEvents();
-  loadActivity();
+  if (labelsData) renderActivity();
   if (speciesData) renderAnimals();
   $("#events-title").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -805,7 +790,6 @@ async function loadCameras() {
   $("#cameras-count").textContent = state.cameras.length ? `${state.cameras.length} total` : "";
   $("#cameras-empty").hidden = state.cameras.length > 0;
   $("#cameras").replaceChildren(...state.cameras.map(cameraTile));
-  refreshCameraCounts();
 }
 
 function cameraTile(c) {
@@ -901,38 +885,49 @@ function renderHubCamera(node, id, hubs) {
   meta.title = hub.last_error || "";
 }
 
-async function refreshCameraPictures() {
-  for (const node of document.querySelectorAll("#cameras .cam")) {
-    const id = node.dataset.id;
-    const img = node.querySelector("img");
-    if (node.dataset.kind === "hub_clips") {
-      // Battery cameras have no live stream: show their newest event's snapshot.
-      try {
-        const page = await api(`events${query({ camera: id, limit: 1 })}`);
-        const e = page.items[0];
-        if (e && e.snapshot_url) img.src = `${API}/events/${e.id}/snapshot.jpg`;
-      } catch (_) {
-        /* keep the old picture */
-      }
-    } else {
-      img.src = `${API}/cameras/${encodeURIComponent(id)}/latest.jpg?t=${Date.now()}`;
+/// A battery camera's tile shows its newest event's snapshot.
+function showOnHubCamera(e) {
+  if (!e || !e.snapshot_url) return;
+  const node = document.querySelector(`#cameras .cam[data-kind="hub_clips"][data-id="${CSS.escape(e.camera_id)}"]`);
+  if (!node || Number(node.dataset.shown || 0) > e.id) return;
+  node.dataset.shown = e.id;
+  const src = `${API}/events/${e.id}/snapshot.jpg`;
+  const img = node.querySelector("img");
+  if (!img.src.endsWith(src)) img.src = src;
+}
+
+/// Reloads the live cameras' pictures.
+function refreshCameraPictures() {
+  if (document.hidden) return; // nobody is looking
+  for (const node of document.querySelectorAll('#cameras .cam:not([data-kind="hub_clips"])')) {
+    node.querySelector("img").src = `${API}/cameras/${encodeURIComponent(node.dataset.id)}/latest.jpg?t=${Date.now()}`;
+  }
+}
+
+/// Battery cameras have no live stream: their picture is their newest event's snapshot. Live
+/// events bring it (see `showOnHubCamera`); this asks for it, at the start and now and then.
+async function refreshHubPictures() {
+  for (const node of document.querySelectorAll('#cameras .cam[data-kind="hub_clips"]')) {
+    try {
+      const page = await api(`events${query({ camera: node.dataset.id, limit: 1 })}`);
+      const e = page.items[0];
+      if (!e || !e.snapshot_url) continue;
+      node.dataset.shown = 0; // the newest one may be older than the one shown, after a delete
+      showOnHubCamera(e);
+    } catch (_) {
+      /* keep the old picture */
     }
   }
 }
 
-async function refreshCameraCounts() {
-  const today = todayInStation();
-  await Promise.all(state.cameras.map(async (c) => {
+/// Shows each camera's events of today; `cameras` maps a camera id to its counts per label.
+function renderCameraCounts(cameras) {
+  for (const c of state.cameras) {
     const node = document.querySelector(`#cameras .cam[data-id="${CSS.escape(c.id)}"] .counts`);
-    if (!node) return;
-    try {
-      const data = await api(`stats/hourly${query({ date: today, camera: c.id })}`);
-      const counts = LABELS.map((l) => [l, data.hours.reduce((s, h) => s + h[l.id], 0)]).filter(([, n]) => n > 0);
-      node.textContent = counts.length ? `Today: ${counts.map(([l, n]) => `${l.icon} ${n}`).join("  ")}` : "Nothing today";
-    } catch (_) {
-      node.textContent = "";
-    }
-  }));
+    if (!node) continue;
+    const counts = LABELS.map((l) => [l, cameras[c.id]?.[l.id] || 0]).filter(([, n]) => n > 0);
+    node.textContent = counts.length ? `Today: ${counts.map(([l, n]) => `${l.icon} ${n}`).join("  ")}` : "Nothing today";
+  }
 }
 
 // ---------- live view ----------
@@ -1133,6 +1128,7 @@ function connectStream() {
   const handle = (kind) => (event) => {
     try {
       const e = JSON.parse(event.data);
+      showOnHubCamera(e);
       putEvent(e, { live: kind === "started" && !state.tiles.has(e.id) });
       scheduleChartRefresh();
     } catch (err) {
@@ -1146,12 +1142,25 @@ function connectStream() {
   stream.addEventListener("removed", (event) => removeEvent(Number(event.lastEventId)));
 }
 
-function refreshCharts() {
+/// Loads every chart and the cameras' counts of today with one request.
+async function refreshCharts() {
   state.lastChartRefresh = Date.now();
-  loadActivity();
-  loadSpeciesStats();
-  if (state.date === todayInStation()) loadHourly();
-  refreshCameraCounts();
+  const asked = { window: state.window, camera: state.camera, date: state.date };
+  try {
+    const data = await api(`stats/overview${query(asked)}`);
+    // A filter changed meanwhile: the request made for it draws the charts.
+    if (asked.window !== state.window || asked.camera !== state.camera || asked.date !== state.date) return;
+    labelsData = data.labels;
+    speciesData = data.species;
+    renderActivity();
+    renderAnimals();
+    renderSpeciesTable();
+    renderHourly($("#hourly-chart"), $("#hourly-legend"), data.hourly);
+    renderCameraCounts(data.today.cameras);
+    state.todayTotal = Object.values(data.today.cameras).reduce((sum, c) => sum + LABELS.reduce((n, l) => n + (c[l.id] || 0), 0), 0);
+  } catch (e) {
+    for (const id of ["#activity-chart", "#animals-chart"]) showMessage($(id), `Could not load: ${e.message}`, true);
+  }
 }
 
 function scheduleChartRefresh() {
@@ -1191,15 +1200,13 @@ async function init() {
     button.addEventListener("click", () => {
       state.window = button.dataset.window;
       for (const b of document.querySelectorAll("#window-buttons button")) b.setAttribute("aria-pressed", String(b === button));
-      loadActivity();
-      loadSpeciesStats();
+      refreshCharts();
       loadEvents();
     });
   }
   $("#camera-filter").addEventListener("change", (ev) => {
     state.camera = ev.target.value;
     refreshCharts();
-    loadHourly();
     loadEvents();
   });
   for (const b of document.querySelectorAll("#label-chips button[data-label]")) {
@@ -1268,13 +1275,22 @@ async function init() {
   $("#viewer-next").addEventListener("click", () => stepViewer(1));
 
   await loadCameras();
-  await Promise.all([loadHealth(), loadActivity(), loadSpeciesStats(), loadHourly(), loadEvents(), refreshCameraPictures()]);
-  state.lastChartRefresh = Date.now();
+  await Promise.all([refreshCharts(), loadEvents(), refreshCameraPictures(), refreshHubPictures()]);
+  await loadHealth(); // after the charts: it shows their count of today's events
   connectStream();
 
-  setInterval(loadHealth, 15000);
+  setInterval(() => document.hidden || loadHealth(), 15000);
   setInterval(refreshCameraPictures, CAMERA_REFRESH_MS);
+  // Back on the page: catch up at once.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    loadHealth();
+    refreshCameraPictures();
+    refreshHubPictures();
+    scheduleChartRefresh();
+  });
   setInterval(() => {
+    if (document.hidden) return;
     updateRelativeTimes();
     const today = todayInStation();
     if (dateInput.max !== today) {
@@ -1287,6 +1303,7 @@ async function init() {
       }
     }
     refreshCharts();
+    refreshHubPictures();
   }, 60000);
 }
 

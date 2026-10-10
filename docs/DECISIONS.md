@@ -495,3 +495,18 @@ narrow one down.
   stream that is taller than wide by 270° (`full_rotate` overrides this).
 - **Limits.** At most two such streams at once, each its own connection to the camera or Hub. retina's
   `h265` feature is on for this; it is Rust only.
+
+## 37. 2026-10-09: A quieter dashboard
+
+- **Problem.** The page asked for every number on its own: a deleted event meant nine requests, and
+  an idle page made about 48 a minute. The owner's connection to the server was cut after bursts of
+  requests (a port blocked for about 15 minutes, apparently by the router between the two networks).
+- **Decision.** `GET /stats/overview` answers with the label, species and hourly counts and each
+  camera's events of today in one go; the page draws all its charts from it. A delete is now the
+  delete and one such request, shared by deletes within 5 seconds.
+- **Less polling.** The status line takes "events today" from that answer. A battery camera's picture
+  comes with live events, and is asked for once a minute. Live camera pictures are reloaded every
+  20 s, not 10. A page in a hidden tab asks for nothing and catches up when it is shown again.
+- **Why still a reload after a delete.** Counting in the page would be one request less, and would
+  drift from the server when two people use it.
+- **Not shown.** That the requests were what got the port blocked: this takes most of them away.

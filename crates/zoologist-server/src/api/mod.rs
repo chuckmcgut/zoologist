@@ -47,6 +47,7 @@ pub fn router(app: AppState) -> Router {
         .route("/stats/labels", get(stats::labels))
         .route("/stats/species", get(stats::species))
         .route("/stats/hourly", get(stats::hourly))
+        .route("/stats/overview", get(stats::overview))
         .route("/animals/recent", get(animals::recent))
         .route("/animals/daily", get(animals::daily))
         .route("/stream", get(stream::stream))

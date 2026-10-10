@@ -281,6 +281,44 @@ async fn stats_routes() {
     let (status, body) = get(&f.app, "/api/v1/stats/hourly").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["hours"].as_array().unwrap().len(), 24);
+
+    // The dashboard's one request gives the same answers, and today's counts per camera.
+    let (status, all) = get(&f.app, "/api/v1/stats/overview?window=1h").await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, labels) = get(&f.app, "/api/v1/stats/labels?window=1h").await;
+    let (_, species) = get(&f.app, "/api/v1/stats/species?window=1h").await;
+    assert_eq!(all["labels"], labels);
+    assert_eq!(all["species"], species);
+    assert_eq!(all["hourly"], body);
+}
+
+#[tokio::test]
+async fn the_overview_counts_today_for_every_camera() {
+    let dir = tempfile::tempdir().unwrap();
+    let camera = |id: &str| -> zoologist_core::config::CameraConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id,
+            "detect_url": "rtsp://10.0.0.1/sub", "record_url": "rtsp://10.0.0.1/main"
+        }))
+        .unwrap()
+    };
+    let mut config = Config::default();
+    config.server.data_dir = dir.path().to_path_buf();
+    config.cameras = vec![camera("yard"), camera("gate")];
+    let store = Store::open(&dir.path().join("db.redb"), config.station.timezone).unwrap();
+    let app = AppState::without_pipeline(config, store);
+    app.store
+        .insert_event(&new_event(Label::Person, 0))
+        .unwrap();
+
+    // Whatever camera the charts are limited to, each camera has its own count.
+    let (status, all) = get(&app, "/api/v1/stats/overview?camera=gate").await;
+    assert_eq!(status, StatusCode::OK);
+    let cameras = &all["today"]["cameras"];
+    assert_eq!(cameras.as_object().unwrap().len(), 2);
+    assert_eq!(cameras["yard"]["person"], 1);
+    assert_eq!(cameras["gate"]["person"], 0);
+    assert_eq!(all["labels"]["items"][0]["count"], 0);
 }
 
 /// Stores an animal event `minutes_ago` named `common` (no name when `None`); returns its id.

@@ -286,6 +286,19 @@ curl -s "$Z/stats/hourly?date=2026-09-19"
 # {"date":"2026-09-19","hours":[{"hour":0,"person":0,"vehicle":1,"animal":2,"motion":0}, … 24 entries]}
 ```
 
+### `GET /stats/overview`
+
+The three answers above in one, for a page that shows them all: `labels`, `species` and `hourly`, each as its
+own route gives it (`window`, `date` and `camera` mean the same). `today` has every camera's events of today
+per label, whatever `camera` is.
+
+```sh
+curl -s "$Z/stats/overview?window=24h"
+# {"labels":{"window":"24h","items":[…]},"species":{"window":"24h","items":[…]},
+#  "hourly":{"date":"2026-09-19","hours":[…]},
+#  "today":{"date":"2026-09-19","cameras":{"yard":{"person":1,"vehicle":0,"animal":4,"motion":9}, …}}}
+```
+
 ## Animals for other programs
 
 Two routes for a home dashboard or a script that only wants to know which animals came by. They give names,

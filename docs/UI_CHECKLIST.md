@@ -71,7 +71,7 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
   `requestVideoFrameCallback`, not just an advancing clock.
 - ✅ Battery (Hub) cameras have no live view (it would wake them).
 
-- ✅ Each camera tile shows its latest picture (refreshed every 10 s), a state dot, detect/record state and analysed fps.
+- ✅ Each camera tile shows its latest picture (refreshed every 20 s), a state dot, detect/record state and analysed fps.
 - ✅ Each camera tile shows today's counts per label.
 - ✅ Hub cameras show 🔋 and the newest event's snapshot with "Last event n min ago".
 - ⬜ Hub cameras show the Hub importer's status and last import time (Step 7.2).
