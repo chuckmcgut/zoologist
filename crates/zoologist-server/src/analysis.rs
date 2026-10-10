@@ -79,6 +79,7 @@ pub fn spawn_analysis(
                         frame.height,
                         &camera.motion_mask,
                     )
+                    .warm_only(camera.warm_motion_only)
                 });
                 let boxes = md.process(&frame);
 

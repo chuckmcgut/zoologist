@@ -510,3 +510,18 @@ narrow one down.
 - **Why still a reload after a delete.** Counting in the page would be one request less, and would
   drift from the server when two people use it.
 - **Not shown.** That the requests were what got the port blocked: this takes most of them away.
+
+## 38. 2026-10-09: A thermal camera only sees warm things move
+
+- **Problem.** The thermal camera made motion events all night from branches moving. On a thermal
+  picture the owner only cares about what is warm: a person, a vehicle, an animal.
+- **Decision.** `warm_motion_only = true` on a camera: a changed pixel only counts as motion when
+  it is warm now. It applies to motion events and to waking the detector.
+- **What is warm.** The camera colours its picture from dark blue and purple (cold) over red and
+  orange to yellow and white (hot). Brightness does not tell these apart (purple and red are
+  equally dark), colour does: measured on the camera's own scale, V − U is below 0 on the cold
+  third, 85 to 140 from red to yellow, and falls again only where the picture is nearly white.
+  Warm is V − U of 40 or more, or a luma of 200 or more.
+- **Limits.** The camera spreads its colours over the temperatures in view, so "warm" means warm
+  for this scene, not a temperature: leaves in the sun are orange and still count. Tried on colours
+  from the camera's scale; not yet on a night of real footage.

@@ -469,6 +469,12 @@ pub struct CameraConfig {
     /// Polygons to ignore, each a flat list `[x1, y1, x2, y2, …]` in normalised coordinates.
     #[serde(default)]
     pub motion_mask: Vec<Vec<f32>>,
+    /// For a thermal camera whose picture is coloured from dark blue and purple (cold) over red
+    /// and orange to yellow and white (hot): only something warm that moves is motion. Branches
+    /// and grass moving in the cold part of the view are ignored, for motion events and for
+    /// waking the detector.
+    #[serde(default)]
+    pub warm_motion_only: bool,
 }
 
 fn yes() -> bool {

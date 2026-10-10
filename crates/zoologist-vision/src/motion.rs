@@ -12,6 +12,11 @@ use zoologist_core::{BBox, Frame};
 const WARM_UP_FRAMES: u32 = 10;
 /// Background values are stored multiplied by this, so slow learning rates still move them.
 const FIXED: i32 = 16;
+/// A thermal camera's picture is warm where it is this much more red than blue (V − U): cold is
+/// dark blue and purple (below 0), warm runs from red over orange to yellow (85 to 140).
+const WARM_RED_OVER_BLUE: i32 = 40;
+/// The hottest end of the scale is nearly white: no colour, but this bright.
+const WARM_LUMA: u8 = 200;
 
 /// Finds moving areas in a camera's frames. One instance per camera.
 pub struct MotionDetector {
@@ -27,6 +32,8 @@ pub struct MotionDetector {
     bg: Vec<i32>,
     /// `true` for pixels inside a motion mask (ignored).
     masked: Vec<bool>,
+    /// Only changes where the picture is warm count (a thermal camera).
+    warm_only: bool,
     frames_seen: u32,
     last_changed_fraction: f32,
     // Scratch buffers reused between frames.
@@ -50,6 +57,7 @@ impl MotionDetector {
             h: 0,
             bg: Vec::new(),
             masked: Vec::new(),
+            warm_only: false,
             frames_seen: 0,
             last_changed_fraction: 0.0,
             blurred: Vec::new(),
@@ -60,6 +68,13 @@ impl MotionDetector {
         };
         detector.resize(frame_w, frame_h);
         detector
+    }
+
+    /// For a thermal camera: motion only counts where the picture shows something warm, so
+    /// branches and grass moving in the cold part of the view are ignored.
+    pub fn warm_only(mut self, on: bool) -> Self {
+        self.warm_only = on;
+        self
     }
 
     /// Fraction of analysed pixels that changed in the last processed frame (for statistics).
@@ -106,6 +121,26 @@ impl MotionDetector {
             self.reset_background();
             self.frames_seen = WARM_UP_FRAMES;
             return Vec::new();
+        }
+
+        // A thermal camera: what moves but is cold (branches, grass) is not motion.
+        if self.warm_only {
+            let (fw, fh) = (frame.width as usize, frame.height as usize);
+            let (cw, ch) = (fw / 2, fh / 2);
+            let (y_plane, u_plane, v_plane) = (frame.y_plane(), frame.u_plane(), frame.v_plane());
+            for ay in 0..self.h {
+                // The middle of this analysis pixel in the frame.
+                let fy = ((2 * ay + 1) * fh / (2 * self.h)).min(fh - 1);
+                for ax in 0..self.w {
+                    let i = ay * self.w + ax;
+                    if !self.changed[i] {
+                        continue;
+                    }
+                    let fx = ((2 * ax + 1) * fw / (2 * self.w)).min(fw - 1);
+                    let c = (fy / 2).min(ch - 1) * cw + (fx / 2).min(cw - 1);
+                    self.changed[i] = is_warm(y_plane[fy * fw + fx], u_plane[c], v_plane[c]);
+                }
+            }
         }
 
         // 3. Grow changed areas slightly so a moving object is one component, then group them.
@@ -246,6 +281,11 @@ impl MotionDetector {
         boxes.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
         boxes.into_iter().map(|(_, bbox)| bbox).collect()
     }
+}
+
+/// Whether a pixel of a thermal camera's picture is on the warm side of its colour scale.
+fn is_warm(y: u8, u: u8, v: u8) -> bool {
+    v as i32 - u as i32 >= WARM_RED_OVER_BLUE || y >= WARM_LUMA
 }
 
 fn find(parent: &mut [u32], mut x: u32) -> u32 {
@@ -498,6 +538,59 @@ mod tests {
             ..frame(1, 20, None)
         };
         assert!(d.process(&small).is_empty());
+    }
+
+    /// A frame in a thermal camera's colours: cold purple, with an optional square of `colour`.
+    fn thermal(seq: u64, square: Option<(u32, [u8; 3])>) -> Frame {
+        let mut rgb: Vec<u8> = [86, 26, 140].repeat((W * H) as usize);
+        if let Some((sx, colour)) = square {
+            for y in 100..160 {
+                for x in sx..sx + 60 {
+                    let p = ((y * W + x) * 3) as usize;
+                    rgb[p..p + 3].copy_from_slice(&colour);
+                }
+            }
+        }
+        Frame {
+            camera_id: "test".into(),
+            seq,
+            captured_at: Utc::now(),
+            width: W,
+            height: H,
+            i420: Arc::new(rgb_to_i420(&rgb, W, H).unwrap()),
+        }
+    }
+
+    /// Whether a square of `colour` moving through a cold view is ever reported as motion.
+    fn moves(warm_only: bool, colour: [u8; 3]) -> bool {
+        let mut d = detector(&[]).warm_only(warm_only);
+        for i in 0..12 {
+            d.process(&thermal(i, None));
+        }
+        (0..10).any(|i| {
+            !d.process(&thermal(12 + i, Some((100 + 30 * i as u32, colour))))
+                .is_empty()
+        })
+    }
+
+    #[test]
+    fn a_thermal_camera_only_sees_warm_things_move() {
+        // The camera's scale from cold to hot: dark blue, purple, red, orange, yellow, white.
+        let (blue, pink, red, orange, yellow, white) = (
+            [20, 10, 60],
+            [190, 90, 200],
+            [215, 40, 30],
+            [240, 110, 20],
+            [250, 215, 60],
+            [255, 250, 225],
+        );
+        for cold in [blue, pink] {
+            assert!(moves(false, cold), "{cold:?} moves for an ordinary camera");
+            assert!(!moves(true, cold), "{cold:?} is cold");
+        }
+        for warm in [red, orange, yellow, white] {
+            assert!(moves(true, warm), "{warm:?} is warm");
+        }
     }
 
     #[test]

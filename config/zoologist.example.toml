@@ -125,6 +125,8 @@ record = true
 labels = ["person", "vehicle", "animal", "motion"]   # drop "motion" for a view full of trees:
                                                      # sun and shadows make motion events all day
 # motion_mask = [[0.0,0.0, 0.3,0.0, 0.3,0.08, 0.0,0.08]]   # e.g. the timestamp overlay
+# warm_motion_only = true        # a thermal camera with a colour scale (blue/purple = cold, red to
+                                 # yellow and white = hot): only something warm that moves is motion
 # require_movement = []          # this camera's own tracking.require_movement. [] for a view of a
                                  # road where nothing parks: every vehicle seen is an event
 

@@ -90,6 +90,8 @@ clips: 10–60 GB, depending on how busy your cameras are and how long you keep 
    - `assume` in `[species]`: groups that mean one species near you, such as
      `{ cervidae = "white-tailed deer" }`. An answer of "deer family" then becomes that species.
    - `motion_mask`: areas to ignore, such as a timestamp overlay.
+   - `warm_motion_only = true`: for a thermal camera. Only something warm that moves is motion; branches
+     moving in the cold part of the view are ignored.
    - `[retention]` and `[recording]`: how long, and how many gigabytes of, clips and recordings to keep.
 
    Paths may stay relative (`models/…`): inside the container they point to the mounted folders.
