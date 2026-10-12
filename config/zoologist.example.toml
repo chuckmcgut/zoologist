@@ -25,6 +25,16 @@ workers = 3                # detector threads (each ~1 core while busy)
 queue_capacity = 12        # pending regions; the oldest is dropped when full
 max_regions_per_frame = 2
 keepalive_seconds = 2
+idle_motion_seconds = 1    # wind or rain: motion all the time and nothing found. The detector then
+                           # looks once in this many seconds until it finds something. 0 = every frame
+
+# The same detector at 640: for `detector = "md-sorrel-640"` on a Reolink Hub (see there).
+# [models.md-sorrel-640]
+# path = "/models/md_v1000_sorrel_640.onnx"
+# kind = "yolov8"
+# classes = "megadetector"
+# input_size = 640
+# score_threshold = 0.35
 
 [models.md-sorrel]
 path = "/models/md_v1000_sorrel_320.onnx"
@@ -101,6 +111,9 @@ clips_max_total_mb = 100000
 
 [[reolink_hubs]]
 id = "home-hub"
+# detector = "md-sorrel-640"     # this Hub's recordings get their own, larger detector (a [models.*]
+                                 # key). About 4 times slower, which a recording can afford, and it
+                                 # keeps hold of a small, distant animal. Live cameras are not affected.
 url = "http://192.168.1.10"      # enable HTTP on the Hub; a pure-Rust build has no TLS client
 user = "zoologist"               # a dedicated low-privilege Hub user with playback rights
 password = "change-me"
@@ -175,6 +188,6 @@ record_url = "rtsp://192.168.1.10:554/h264Preview_01_sub"
 [[cameras]]
 id = "trail-argus"
 name = "Trail (Argus)"
-kind = "hub_clips"
+kind = "hub_clips"          # clicking it in the dashboard wakes it for a live view (2 minutes at a time)
 hub = "home-hub"
 channel = 0                      # Hub API channel number (0-based)

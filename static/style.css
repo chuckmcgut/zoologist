@@ -162,6 +162,11 @@ select, input[type="date"] {
 .button.danger.armed { color: #fff; background: var(--bad); border-color: var(--bad); }
 /* A full-resolution stream that the camera sends on its side is turned upright here. */
 #live-stage { position: relative; }
+#live-tabs { margin-top: 8px; }
+/* The masked zones, drawn over the live picture (placed by placeZones in app.js). */
+#live-zones { position: absolute; pointer-events: none; }
+#live-zones[hidden] { display: none; }
+#live-zones polygon { fill: rgb(255 60 60 / 0.35); stroke: #ff3c3c; stroke-width: 2; vector-effect: non-scaling-stroke; }
 #live-stage.turned { margin-top: 10px; background: #000; border-radius: 8px; overflow: hidden; }
 #live-stage.turned video { position: absolute; top: 50%; left: 50%; max-height: none; margin: 0; border-radius: 0; }
 .button.danger { color: var(--bad); }

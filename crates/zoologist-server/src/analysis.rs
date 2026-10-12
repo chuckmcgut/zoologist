@@ -26,7 +26,15 @@ pub struct AnalysisOptions {
     /// Until this time, run the detector on the whole frame (in tiles) without waiting for
     /// motion: a battery camera's clip starts with the animal already in view.
     pub tiles_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The detector's input size, when it is not `inference.detector` (a Hub's own detector).
+    pub model_size: Option<u32>,
 }
+
+/// Detector runs in a row that found nothing, on frames with motion, before a live camera's
+/// detector slows down to `inference.idle_motion_seconds` (3 seconds at 5 frames a second).
+const IDLE_AFTER_RUNS: u32 = 15;
+/// This long without motion and the count starts again.
+const IDLE_FORGET: chrono::Duration = chrono::Duration::seconds(10);
 
 /// Starts the analysis thread of `camera`. It ends when `frames` closes, after ending every
 /// open event.
@@ -43,10 +51,12 @@ pub fn spawn_analysis(
     std::thread::Builder::new()
         .name(format!("analyse-{}", camera.id))
         .spawn(move || {
-            let model_size = config
-                .models
-                .get(&config.inference.detector)
-                .map_or(320, |m| m.input_size);
+            let model_size = options.model_size.unwrap_or_else(|| {
+                config
+                    .models
+                    .get(&config.inference.detector)
+                    .map_or(320, |m| m.input_size)
+            });
             let keepalive = chrono::Duration::milliseconds(
                 (config.inference.keepalive_seconds * 1000.0) as i64,
             );
@@ -65,6 +75,14 @@ pub fn spawn_analysis(
                 ups.into_iter()
                     .all(|u| updates.blocking_send((camera.id.clone(), u)).is_ok())
             };
+            // Motion that keeps coming while the detector finds nothing (wind, rain): after
+            // `IDLE_AFTER_RUNS` such runs in a row it only looks every `idle_every`.
+            let idle_every = chrono::Duration::milliseconds(
+                (config.inference.idle_motion_seconds * 1000.0) as i64,
+            );
+            let mut fruitless = 0u32;
+            let mut last_detect: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut last_motion: Option<chrono::DateTime<chrono::Utc>> = None;
             let mut last_now = None;
             let mut fps_window = (std::time::Instant::now(), 0u32);
 
@@ -99,9 +117,22 @@ pub fn spawn_analysis(
                         config.inference.max_regions_per_frame,
                     )
                 };
+                if !boxes.is_empty() {
+                    last_motion = Some(now);
+                } else if last_motion.is_none_or(|t| now - t > IDLE_FORGET) {
+                    fruitless = 0;
+                }
+                let idle = !options.background
+                    && !tiles
+                    && keep.is_empty()
+                    && fruitless >= IDLE_AFTER_RUNS
+                    && last_detect.is_some_and(|t| now - t < idle_every);
+                let regions = if idle { Vec::new() } else { regions };
+                let detecting = detector.is_some() && !regions.is_empty();
                 let mut dropped = false;
                 let track_events = match (&detector, regions.is_empty()) {
                     (Some(pool), false) => {
+                        last_detect = Some(now);
                         let (tx, rx) = oneshot::channel();
                         let job = DetectJob {
                             frame: frame.clone(),
@@ -115,6 +146,11 @@ pub fn spawn_analysis(
                         }
                         match rx.blocking_recv() {
                             Ok(result) if !result.dropped => {
+                                if result.detections.is_empty() && keep.is_empty() {
+                                    fruitless = fruitless.saturating_add(1);
+                                } else {
+                                    fruitless = 0;
+                                }
                                 tracker.update(now, &frame, &result.detections)
                             }
                             _ => {
@@ -131,9 +167,7 @@ pub fn spawn_analysis(
                     s.motion_frames += u64::from(!boxes.is_empty());
                     s.motion_fraction = md.last_changed_fraction();
                     s.last_frame_at = Some(now);
-                    if !keep.is_empty() || !boxes.is_empty() {
-                        s.detect_jobs += 1;
-                    }
+                    s.detect_jobs += u64::from(detecting);
                     s.detect_dropped += u64::from(dropped);
                     fps_window.1 += 1;
                     let elapsed = fps_window.0.elapsed().as_secs_f32();
@@ -225,4 +259,95 @@ pub fn analyse_recording(
     let first = feeder.join().ok().flatten();
     let _ = analysis.join();
     Ok((updates, first))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Detector runs on 20 seconds of a square jumping about (motion in every frame, nothing
+    /// the detector knows), with `inference.idle_motion_seconds` set to `idle`.
+    fn runs_on_endless_motion(idle: f32) -> Option<u64> {
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../models/md_v1000_sorrel_320.onnx");
+        if !model.exists() {
+            eprintln!("skipping: {} not found", model.display());
+            return None;
+        }
+        let mut config: Config = Config::parse(&format!(
+            "[models.md-sorrel]\npath = \"{}\"\nkind = \"yolov8\"\nclasses = \"megadetector\"\n\
+             input_size = 320\nscore_threshold = 0.35\n",
+            model.display()
+        ))
+        .unwrap();
+        config.inference.workers = 1;
+        config.inference.idle_motion_seconds = idle;
+        let camera: CameraConfig = serde_json::from_value(serde_json::json!({
+            "id": "yard", "name": "yard", "labels": ["person", "vehicle", "animal"],
+            "detect_url": "rtsp://10.0.0.1/sub", "record_url": "rtsp://10.0.0.1/main"
+        }))
+        .unwrap();
+        let (detector, _workers) = crate::pipeline::load_detector(&config).unwrap();
+        let (frames_tx, frames_rx) = mpsc::channel::<Frame>(4);
+        let (updates_tx, mut updates_rx) = mpsc::channel::<CameraUpdate>(64);
+        let stats = Arc::<RwLock<AnalysisStats>>::default();
+        let analysis = spawn_analysis(
+            camera,
+            Arc::new(config),
+            frames_rx,
+            Some(detector),
+            updates_tx,
+            Arc::default(),
+            stats.clone(),
+            AnalysisOptions::default(),
+        )
+        .unwrap();
+        let drain = std::thread::spawn(move || while updates_rx.blocking_recv().is_some() {});
+        let (w, h) = (640u32, 360u32);
+        let start = chrono::Utc::now();
+        for i in 0..100u32 {
+            let mut rgb = vec![70u8; (w * h * 3) as usize];
+            // No frame of the first second has the square, so the background settles.
+            if i >= 12 {
+                let (sx, sy) = (40 + (i * 97) % 480, 40 + (i * 53) % 200);
+                for y in sy..sy + 60 {
+                    for x in sx..sx + 60 {
+                        let p = ((y * w + x) * 3) as usize;
+                        rgb[p..p + 3].copy_from_slice(&[230, 230, 230]);
+                    }
+                }
+            }
+            let frame = Frame {
+                camera_id: "yard".into(),
+                seq: i as u64,
+                captured_at: start + chrono::Duration::milliseconds(200 * i as i64),
+                width: w,
+                height: h,
+                i420: Arc::new(zoologist_core::yuv::rgb_to_i420(&rgb, w, h).unwrap()),
+            };
+            frames_tx.blocking_send(frame).unwrap();
+        }
+        drop(frames_tx);
+        analysis.join().unwrap();
+        drain.join().unwrap();
+        let s = stats.read().unwrap();
+        assert!(
+            s.motion_frames >= 80,
+            "motion in {} frames",
+            s.motion_frames
+        );
+        Some(s.detect_jobs)
+    }
+
+    #[test]
+    fn endless_motion_with_nothing_in_it_slows_the_detector_down() {
+        let (Some(every_frame), Some(idle)) =
+            (runs_on_endless_motion(0.0), runs_on_endless_motion(1.0))
+        else {
+            return;
+        };
+        // 88 frames with motion: all of them, or 15 and then one a second for 14.6 seconds.
+        assert!(every_frame >= 80, "{every_frame} runs with the rule off");
+        assert!((25..=35).contains(&idle), "{idle} runs with one a second");
+    }
 }

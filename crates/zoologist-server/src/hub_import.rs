@@ -411,6 +411,11 @@ impl Importer {
         let options = AnalysisOptions {
             background: true,
             tiles_until: Some(file.start + chrono::Duration::seconds(TILE_SECONDS)),
+            model_size: self
+                .config
+                .models
+                .get(self.config.detector_for(cam))
+                .map(|m| m.input_size),
         };
         let (updates, first) = analyse_recording(
             &self.config,

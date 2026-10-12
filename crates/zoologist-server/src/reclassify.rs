@@ -349,6 +349,7 @@ fn animal_crops(
     let options = AnalysisOptions {
         background,
         tiles_until: Some(e.started_at + chrono::Duration::seconds(TILE_SECONDS)),
+        model_size: None,
     };
     let (updates, _) = analyse_recording(
         config,

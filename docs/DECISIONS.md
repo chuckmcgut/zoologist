@@ -525,3 +525,39 @@ narrow one down.
 - **Limits.** The camera spreads its colours over the temperatures in view, so "warm" means warm
   for this scene, not a temperature: leaves in the sun are orange and still count. Tried on colours
   from the camera's scale; not yet on a night of real footage.
+
+## 39. 2026-10-12: Watching a battery camera live
+
+- **Problem.** Battery cameras only showed their imported recordings. The owner wanted to click
+  one and watch it, as with the other cameras.
+- **Found.** The Reolink Hub serves its battery cameras over RTSP like any other channel
+  (`h264Preview_NN_sub` and `_main`). Opening the stream wakes the camera; video came after 3 to
+  10 seconds.
+- **Decision.** `GET /cameras/{id}/live.mp4` on a `hub_clips` camera opens that stream for the
+  viewer and closes it when they leave, the way the full-resolution live view does. `?full=1`
+  gives the main stream. Nothing is recorded or analysed: the Hub's own recordings stay the source
+  of events.
+- **Battery.** The camera is awake for as long as someone watches. The server ends the stream after
+  two minutes, and the page offers "Watch again" where it reconnects for other cameras.
+- **Address.** Made from the Hub's `url`, user and password, port 554. No setting for it yet.
+
+## 40. 2026-10-12: Wind, a larger detector for recordings, and showing the masks
+
+- **Wind.** One camera had motion in 90 to 99 % of its frames for a night and a day (3 days of
+  the per-minute statistics), then almost none: weather, not a spot to mask. Each of those frames
+  went to the detector, which found nothing. Now, after 15 detector runs in a row that find nothing,
+  a live camera's frames go to it once a second (`inference.idle_motion_seconds`) until it finds
+  something or the motion has stopped for 10 seconds. An animal walking into the wind-blown view
+  is found at most a second later. Measured on 20 seconds of endless empty motion: 88 runs become
+  about 30.
+- **Not done.** A mask for that camera: on a calm day there is nothing to see, and only two hours
+  of recordings are kept. The spot can be found on the next windy day.
+- **Recordings at 640.** 37 recordings of the two battery cameras were replayed with the detector
+  at 320 and at 640. One camera (animals close, 35 recordings): the same animals, and one "animal"
+  at 320 in a picture with only sun glare that 640 did not report. The other (a deer small on a
+  hillside, 50 seconds): 320 held it for 3 seconds and called the rest motion, 640 followed it to
+  the end. 640 took 4 times as long.
+- **Decision.** `detector` on a `[[reolink_hubs]]` entry names the model for its recordings; it
+  gets one worker. Live cameras keep `inference.detector`. Off unless set.
+- **Masks.** `/cameras` gives each camera's `motion_mask`, and the live view of a camera that has
+  one has a "Masked zones" tab that draws them over the live picture.

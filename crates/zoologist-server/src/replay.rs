@@ -15,7 +15,7 @@ use zoologist_vision::events::{EventKey, EventUpdate};
 use zoologist_vision::species::SpeciesAnswer;
 
 use crate::analysis::{AnalysisOptions, analyse_recording};
-use crate::pipeline::load_detector;
+use crate::pipeline::load_detector_named;
 
 /// One event found in a clip.
 struct Found {
@@ -52,7 +52,10 @@ pub fn replay(
         config.tracking.stationary_seconds
     );
     let config = Arc::new(config);
-    let (detector, _threads) = load_detector(&config)?;
+    // A battery camera's recordings may have their Hub's own detector, as in the importer.
+    let detector_key = config.detector_for(&camera).to_string();
+    let (detector, _threads) =
+        load_detector_named(&config, &detector_key, config.inference.workers)?;
     // With species: animal events are named, and the still-and-unnamed rule is applied.
     let species = if with_species {
         match crate::pipeline::load_species(&config) {
@@ -90,6 +93,7 @@ pub fn replay(
             background: false,
             tiles_until: hub_clip
                 .then(|| start + chrono::Duration::seconds(crate::hub_import::TILE_SECONDS)),
+            model_size: config.models.get(&detector_key).map(|m| m.input_size),
         };
         let (updates, _) =
             analyse_recording(&config, &camera, &detector, info, samples, start, options)?;

@@ -42,13 +42,23 @@ pub async fn cameras(State(app): State<AppState>) -> Json<serde_json::Value> {
                 "labels": c.labels,
                 "record": c.record && c.kind == CameraKind::Stream,
                 // The live view can switch to a sharper stream than the one it shows.
-                "full": c.full_stream_url().is_some(),
+                "full": c.full_stream_url().is_some() || battery_live(&app, c),
+                // Whether the live view works, and after how many seconds it stops by itself.
+                "live": c.kind == CameraKind::Stream || battery_live(&app, c),
+                "live_seconds": battery_live(&app, c).then_some(BATTERY_LIVE.as_secs()),
                 "full_rotate": c.full_rotate,
+                // Areas where motion is ignored: polygons as flat [x1, y1, x2, y2, …] lists, 0..1.
+                "motion_mask": c.motion_mask,
                 "hub": c.hub,
             })
         })
         .collect();
     Json(serde_json::Value::Array(list))
+}
+
+/// Whether this is a battery camera whose Hub can show it live.
+fn battery_live(app: &AppState, camera: &zoologist_core::config::CameraConfig) -> bool {
+    app.config.hub_live_url(camera, false).is_some()
 }
 
 /// `GET /cameras/{id}/latest.jpg`: the newest analysed frame.
@@ -85,14 +95,25 @@ pub async fn latest_jpg(
 /// `GET /cameras/{id}/live.mp4`: the camera's live video as fragmented MP4, for the browser's
 /// MediaSource. The `X-Codec` header carries the codec string (e.g. `avc1.64001f`).
 ///
-/// `?full=1` asks for the camera's full-resolution stream instead (see [`full_live`]).
+/// `?full=1` asks for the camera's full-resolution stream instead (see [`direct_live`]). A
+/// battery camera behind a Reolink Hub is woken for the viewer, and its stream ends by itself
+/// after [`BATTERY_LIVE`].
 pub async fn live_mp4(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<LiveParams>,
 ) -> ApiResult<Response> {
-    if params.full.is_some_and(|v| v != "0" && v != "false") {
-        return full_live(&app, &id).await;
+    let full = params.full.is_some_and(|v| v != "0" && v != "false");
+    let config = app.config.cameras.iter().find(|c| c.id == id && c.enabled);
+    if let Some(url) = config.and_then(|c| app.config.hub_live_url(c, full)) {
+        let name = if full { "live-full" } else { "live" };
+        return direct_live(&app, &id, name, url, BATTERY_START, Some(BATTERY_LIVE)).await;
+    }
+    if full {
+        let url = config.and_then(|c| c.full_stream_url()).ok_or_else(|| {
+            ApiError::not_found("this camera has no separate full-resolution stream")
+        })?;
+        return direct_live(&app, &id, "full", url, FULL_START, None).await;
     }
     let camera = app
         .camera(&id)
@@ -124,27 +145,33 @@ pub struct LiveParams {
     full: Option<String>,
 }
 
-/// Full-resolution streams open at once: each is its own connection to the camera (or its Hub).
+/// How long a battery camera may take to wake up and send video.
+const BATTERY_START: std::time::Duration = std::time::Duration::from_secs(30);
+/// A battery camera's live view ends after this long: it is awake, and draining, all the while.
+const BATTERY_LIVE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Streams opened for one viewer at once: each is its own connection to the camera (or its Hub).
 static FULL_VIEWERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 /// How long the full-resolution stream may take to start.
 const FULL_START: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// The camera's full-resolution stream (often H.265), which Zoologist neither records nor
-/// analyses: it is opened for this viewer and closed when they leave.
-async fn full_live(app: &AppState, id: &str) -> ApiResult<Response> {
+/// A stream that Zoologist neither records nor analyses (a camera's full-resolution stream,
+/// often H.265, or a battery camera's live picture): it is opened at `url` for this viewer and
+/// closed when they leave, or after `limit`.
+async fn direct_live(
+    app: &AppState,
+    id: &str,
+    name: &str,
+    url: String,
+    start: std::time::Duration,
+    limit: Option<std::time::Duration>,
+) -> ApiResult<Response> {
     use axum::http::StatusCode;
     use zoologist_video::stream::StreamItem;
-    let url = app
-        .config
-        .cameras
-        .iter()
-        .find(|c| c.id == id && c.enabled)
-        .and_then(|c| c.full_stream_url())
-        .ok_or_else(|| ApiError::not_found("this camera has no separate full-resolution stream"))?;
     let permit = FULL_VIEWERS.try_acquire().map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
-            "two full-resolution streams are open already".into(),
+            "two of these live streams are open already".into(),
         )
     })?;
     let cancel = app.shutdown.child_token();
@@ -152,13 +179,13 @@ async fn full_live(app: &AppState, id: &str) -> ApiResult<Response> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let status = zoologist_video::source::SharedStatus::default();
     zoologist_video::source::spawn_rtsp_stream(
-        format!("{id}/full"),
+        format!("{id}/{name}"),
         url,
         tx,
         status.clone(),
         cancel,
     );
-    let first = tokio::time::timeout(FULL_START, async {
+    let first = tokio::time::timeout(start, async {
         loop {
             match rx.recv().await {
                 Some(StreamItem::Info(info)) => return Some(info),
@@ -173,10 +200,10 @@ async fn full_live(app: &AppState, id: &str) -> ApiResult<Response> {
             .read()
             .ok()
             .and_then(|s| s.last_error.clone())
-            .unwrap_or_else(|| "no video within 15 s".into());
+            .unwrap_or_else(|| format!("no video within {} s", start.as_secs()));
         return Err(ApiError(
             StatusCode::BAD_GATEWAY,
-            format!("the full-resolution stream did not start: {why}"),
+            format!("the stream did not start: {why}"),
         ));
     };
     let codec = codec_string(&info).ok_or_else(|| {
@@ -184,6 +211,12 @@ async fn full_live(app: &AppState, id: &str) -> ApiResult<Response> {
     })?;
     let stream = crate::live::direct_stream(info, rx, (stop, permit))
         .map_err(|e| ApiError::bad_request(format!("cannot start live view: {e}")))?;
+    let stream = stream.take_until(async move {
+        match limit {
+            Some(limit) => tokio::time::sleep(limit).await,
+            None => std::future::pending().await,
+        }
+    });
     Ok((
         [
             (header::CONTENT_TYPE, "video/mp4".to_string()),

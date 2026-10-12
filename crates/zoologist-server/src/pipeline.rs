@@ -72,6 +72,8 @@ pub struct Pipeline {
     segment_tasks: Vec<JoinHandle<()>>,
     background: Vec<JoinHandle<()>>,
     detector_threads: Vec<std::thread::JoinHandle<()>>,
+    /// Detectors that only a Hub's importer uses.
+    hub_detectors: Vec<DetectorHandle>,
     hub_threads: Vec<std::thread::JoinHandle<()>>,
     updates: Option<mpsc::Sender<crate::analysis::CameraUpdate>>,
     writer: JoinHandle<()>,
@@ -102,21 +104,29 @@ pub fn check_cpu(allow_slow_cpu: bool) -> Result<()> {
 pub fn load_detector(
     config: &Config,
 ) -> Result<(DetectorHandle, Vec<std::thread::JoinHandle<()>>)> {
-    let key = &config.inference.detector;
+    load_detector_named(config, &config.inference.detector, config.inference.workers)
+}
+
+/// Loads the detector `[models.<key>]` and starts `workers` threads for it.
+pub fn load_detector_named(
+    config: &Config,
+    key: &str,
+    workers: usize,
+) -> Result<(DetectorHandle, Vec<std::thread::JoinHandle<()>>)> {
     let model_cfg = config
         .models
         .get(key)
-        .with_context(|| format!("inference.detector = {key:?} has no [models.{key}] section"))?;
+        .with_context(|| format!("detector {key:?} has no [models.{key}] section"))?;
     let model = DetectorModel::load(model_cfg).with_context(|| {
         format!(
             "cannot load detector {key} from {} (run scripts/fetch-models.sh)",
             model_cfg.path.display()
         )
     })?;
-    tracing::info!(model = %key, size = model_cfg.input_size, workers = config.inference.workers, "detector loaded");
+    tracing::info!(model = %key, size = model_cfg.input_size, workers, "detector loaded");
     Ok(spawn_detector_pool(
         Arc::new(model),
-        config.inference.workers,
+        workers,
         config.inference.queue_capacity,
     )?)
 }
@@ -173,7 +183,7 @@ impl Pipeline {
             tracing::info!("closed {closed} event(s) left open by the previous run");
         }
 
-        let (detector, detector_threads) = {
+        let (detector, mut detector_threads) = {
             let config = config.clone();
             tokio::task::spawn_blocking(move || load_detector(&config)).await??
         };
@@ -383,7 +393,21 @@ impl Pipeline {
         ));
         background.push(tokio::spawn(log_stats(app.clone(), cancel.clone())));
         let mut hub_threads = Vec::new();
+        let mut hub_detectors = Vec::new();
         for (hub, runtime) in config.reolink_hubs.iter().zip(&hubs) {
+            // A Hub with its own detector: one worker, since recordings can wait.
+            let detector_handle = match hub.detector.as_ref() {
+                Some(key) if *key != config.inference.detector => {
+                    let (config, key) = (config.clone(), key.clone());
+                    let (handle, threads) =
+                        tokio::task::spawn_blocking(move || load_detector_named(&config, &key, 1))
+                            .await??;
+                    detector_threads.extend(threads);
+                    hub_detectors.push(handle.clone());
+                    handle
+                }
+                _ => detector_handle.clone(),
+            };
             let importer = Importer {
                 hub: hub.clone(),
                 config: config.clone(),
@@ -420,6 +444,7 @@ impl Pipeline {
             segment_tasks,
             background,
             detector_threads,
+            hub_detectors,
             hub_threads,
             updates: Some(updates_tx),
             writer,
@@ -453,6 +478,9 @@ impl Pipeline {
         })
         .await;
         if let Some(pool) = &self.app.detector {
+            pool.shutdown();
+        }
+        for pool in &self.hub_detectors {
             pool.shutdown();
         }
         for task in self.segment_tasks.drain(..) {

@@ -39,6 +39,7 @@ const state = {
   lastDetectorDrops: null,
   health: null,
   live: null, // the open live view
+  liveTab: "live", // "zones" draws the camera's masked zones over the live picture
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -805,8 +806,8 @@ function cameraTile(c) {
     pic.querySelector(".noimg").hidden = true;
   });
   pic.append(img, el("span", { class: "noimg", hidden: true }, hub ? "No events yet" : "No picture yet"));
-  if (!hub) {
-    // Stream cameras: the picture opens the live view.
+  if (c.live ?? !hub) {
+    // The picture opens the live view (a battery camera is woken up for it).
     pic.classList.add("watch");
     pic.setAttribute("role", "button");
     pic.setAttribute("tabindex", "0");
@@ -942,12 +943,24 @@ async function openLive(camera, full = false) {
   fullButton.textContent = full ? "Normal view" : "Full resolution";
   fullButton.onclick = () => openLive(camera, !full);
   turnLive(0);
+  // A camera with masked zones gets a tab that draws them over the live picture. Not on the
+  // full-resolution stream: it can be turned and need not show the same picture.
+  const masks = full ? [] : camera.motion_mask || [];
+  $("#live-tabs").hidden = masks.length === 0;
+  $("#live-zones").replaceChildren(...masks.map((m) => {
+    const points = [];
+    for (let i = 0; i + 1 < m.length; i += 2) points.push(`${m[i]},${m[i + 1]}`);
+    return svg("polygon", { points: points.join(" ") });
+  }));
+  showLiveTab(masks.length && state.liveTab === "zones" ? "zones" : "live");
   const dialog = $("#live-view");
   const video = $("#live-video");
   const note = $("#live-note");
   const status = $("#live-status");
   $("#live-title").textContent = camera.name;
-  status.textContent = "connecting…";
+  // A battery camera has to wake up first, and its live view stops by itself.
+  const battery = camera.live_seconds > 0;
+  status.textContent = battery ? "waking the camera, this takes a few seconds…" : "connecting…";
   note.hidden = true;
   video.hidden = false;
   if (!dialog.open) dialog.showModal();
@@ -1051,8 +1064,44 @@ async function openLive(camera, full = false) {
   } catch (e) {
     if (e.name === "AbortError") return;
   }
+  if (state.live !== session || !dialog.open) return;
+  if (battery) {
+    // Not started again by itself: the camera is awake, and draining, for as long as it is watched.
+    const again = el("button", { type: "button", class: "button" }, "Watch again");
+    again.onclick = () => openLive(camera, full);
+    video.hidden = true;
+    note.hidden = false;
+    note.replaceChildren(`The live view stops after ${Math.round(camera.live_seconds / 60)} minutes to spare the camera's battery. `, again);
+    status.textContent = "stopped";
+    return;
+  }
   // The server ended the stream (e.g. the camera reconnected with new settings): start again.
-  if (state.live === session && dialog.open) setTimeout(() => state.live === session && openLive(camera, full), 1000);
+  setTimeout(() => state.live === session && openLive(camera, full), 1000);
+}
+
+/// The live view's tabs: "live" is the picture alone, "zones" draws the masked zones over it.
+function showLiveTab(tab) {
+  state.liveTab = tab;
+  for (const b of document.querySelectorAll("#live-tabs button")) b.setAttribute("aria-pressed", String(b.dataset.tab === tab));
+  const zones = tab === "zones" && !$("#live-tabs").hidden;
+  $("#live-zones").toggleAttribute("hidden", !zones);
+  $("#live-zones-note").hidden = !zones;
+  placeZones();
+}
+
+/// Lays the masked zones over the picture itself: the video's box can be wider than its
+/// picture (bars at the sides) when the dialog is short.
+function placeZones() {
+  const video = $("#live-video");
+  const zones = $("#live-zones");
+  if (zones.hasAttribute("hidden") || !video.videoWidth || !video.clientWidth) return;
+  const scale = Math.min(video.clientWidth / video.videoWidth, video.clientHeight / video.videoHeight);
+  const w = video.videoWidth * scale;
+  const h = video.videoHeight * scale;
+  zones.style.left = `${video.offsetLeft + (video.clientWidth - w) / 2}px`;
+  zones.style.top = `${video.offsetTop + (video.clientHeight - h) / 2}px`;
+  zones.style.width = `${w}px`;
+  zones.style.height = `${h}px`;
 }
 
 /// Shows the live video turned by `degrees` clockwise (0 undoes it). A quarter turn swaps the
@@ -1246,6 +1295,9 @@ async function init() {
 
   const liveDialog = $("#live-view");
   liveDialog.addEventListener("close", closeLive);
+  for (const b of document.querySelectorAll("#live-tabs button")) b.addEventListener("click", () => showLiveTab(b.dataset.tab));
+  for (const type of ["loadedmetadata", "resize"]) $("#live-video").addEventListener(type, placeZones);
+  window.addEventListener("resize", placeZones);
   liveDialog.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
       ev.preventDefault();

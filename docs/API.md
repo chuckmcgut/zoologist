@@ -135,6 +135,13 @@ record), passed through without decoding.
   when they leave; it is often H.265. A stream sent on its side (Reolink panorama cameras) is turned by the
   page, by `full_rotate` from `/cameras` or by 270° when it is taller than wide. At most two at once (503). 404 for a camera without one, 502 when it
   does not start.
+- **Battery cameras:** a `hub_clips` camera with `"live": true` in `/cameras` is shown live by its Reolink Hub
+  (`h264Preview_NN_sub` over RTSP, `_main` with `?full=1`). Asking wakes the camera, which takes up to 10
+  seconds (502 after 30). The stream ends by itself after `live_seconds` (120), because the camera is awake
+  and using its battery all the while; the page then offers "Watch again" and does not reconnect.
+- **Masked zones:** `/cameras` gives each camera's `motion_mask` (polygons as flat `[x1, y1, x2, y2, …]`
+  lists, 0 to 1). For a camera that has any, the live view has a "Masked zones" tab that draws them over the
+  picture.
 - **Start:** a new viewer starts at the latest keyframe.
 - **Codec:** the `X-Codec` header gives the codec string, e.g. `avc1.4d401f`.
 - **Slow viewers:** a viewer that falls behind skips to the next keyframe.

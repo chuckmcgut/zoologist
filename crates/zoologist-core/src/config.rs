@@ -120,6 +120,10 @@ pub struct InferenceConfig {
     pub max_regions_per_frame: usize,
     /// Seconds between detections on a still-active track when there is no motion.
     pub keepalive_seconds: f32,
+    /// When motion keeps coming and the detector keeps finding nothing (wind in the bushes,
+    /// rain, snow), a live camera's frames go to the detector only this often, in seconds. The
+    /// first thing it finds brings back every frame. 0 turns this off.
+    pub idle_motion_seconds: f32,
 }
 
 impl Default for InferenceConfig {
@@ -130,6 +134,7 @@ impl Default for InferenceConfig {
             queue_capacity: 12,
             max_regions_per_frame: 2,
             keepalive_seconds: 2.0,
+            idle_motion_seconds: 1.0,
         }
     }
 }
@@ -395,6 +400,11 @@ pub struct HubConfig {
     /// Clip to keep when the main recording is H.265: `sub` keeps the H.264 sub file instead.
     #[serde(default)]
     pub clip_codec_fallback: HubStream,
+    /// Key into `[models.*]` of the detector for this Hub's recordings, when not
+    /// `inference.detector`. A recording is analysed after the fact, so it can afford a larger
+    /// (slower) model, which keeps hold of a small, distant animal.
+    #[serde(default)]
+    pub detector: Option<String>,
 }
 
 fn default_poll_seconds() -> u32 {
@@ -533,6 +543,49 @@ impl Config {
                 }
             }
         }
+    }
+
+    /// The live stream a Reolink Hub serves for one of its battery cameras (`kind =
+    /// "hub_clips"`): the small stream, or with `main` the full-resolution one. Opening it wakes
+    /// the camera, so it is only for someone who asked to watch.
+    pub fn hub_live_url(&self, cam: &CameraConfig, main: bool) -> Option<String> {
+        if cam.kind != CameraKind::HubClips {
+            return None;
+        }
+        let hub = self
+            .reolink_hubs
+            .iter()
+            .find(|h| Some(&h.id) == cam.hub.as_ref())?;
+        // The Hub's web address without scheme, credentials, port and path.
+        let rest = hub
+            .url
+            .split_once("://")
+            .map_or(hub.url.as_str(), |(_, r)| r);
+        let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        let host = match host.strip_prefix('[') {
+            Some(v6) => &host[..v6.find(']')? + 2],
+            None => host.split(':').next()?,
+        };
+        if host.is_empty() {
+            return None;
+        }
+        let stream = if main { "main" } else { "sub" };
+        let url = format!(
+            "rtsp://{host}:554/h264Preview_{:02}_{stream}",
+            cam.channel? as u32 + 1
+        );
+        with_credentials(&url, &hub.user, &hub.password)
+    }
+
+    /// The `[models.*]` key of the detector that analyses `camera`'s video: its Hub's for a
+    /// battery camera's recordings, else `inference.detector`.
+    pub fn detector_for(&self, camera: &CameraConfig) -> &str {
+        self.reolink_hubs
+            .iter()
+            .find(|h| camera.kind == CameraKind::HubClips && Some(&h.id) == camera.hub.as_ref())
+            .and_then(|h| h.detector.as_deref())
+            .unwrap_or(&self.inference.detector)
     }
 
     /// Parses TOML text without validating it.
@@ -677,6 +730,16 @@ impl Config {
                      build has no TLS client so it stays pure Rust), got {}",
                     hub.id,
                     redact_url(&hub.url)
+                ));
+            }
+            if let Some(key) = hub
+                .detector
+                .as_ref()
+                .filter(|k| !self.models.contains_key(*k))
+            {
+                err(format!(
+                    "reolink_hubs {:?}: detector = {key:?} has no matching [models.{key}] section",
+                    hub.id
                 ));
             }
             if hub.poll_seconds < 5 {
@@ -960,6 +1023,38 @@ mod tests {
         assert_eq!(config.cameras[3].hub.as_deref(), Some("home-hub"));
         assert_eq!(config.cameras[4].kind, CameraKind::HubClips);
         assert_eq!(config.cameras[0].labels, Label::ALL.to_vec());
+    }
+
+    #[test]
+    fn a_hub_serves_its_battery_cameras_live() {
+        let mut config = example();
+        let hub = config.reolink_hubs[0].id.clone();
+        config.reolink_hubs[0].url = "https://192.168.1.40:8443/".into();
+        config.reolink_hubs[0].user = "zoo".into();
+        config.reolink_hubs[0].password = "p w".into();
+        let battery = config
+            .cameras
+            .iter()
+            .find(|c| c.kind == CameraKind::HubClips)
+            .unwrap()
+            .clone();
+        assert_eq!(battery.hub.as_ref(), Some(&hub));
+        let channel = battery.channel.unwrap() as u32 + 1;
+        assert_eq!(
+            config.hub_live_url(&battery, false),
+            Some(format!(
+                "rtsp://zoo:p%20w@192.168.1.40:554/h264Preview_{channel:02}_sub"
+            ))
+        );
+        assert_eq!(
+            config.hub_live_url(&battery, true),
+            Some(format!(
+                "rtsp://zoo:p%20w@192.168.1.40:554/h264Preview_{channel:02}_main"
+            ))
+        );
+        // Only battery cameras: a stream camera has its own addresses.
+        let stream = config.cameras[0].clone();
+        assert_eq!(config.hub_live_url(&stream, false), None);
     }
 
     #[test]

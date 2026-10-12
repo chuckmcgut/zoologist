@@ -154,7 +154,12 @@
     <h3 id="live-title"></h3>
     <p id="live-meta" class="muted"><span class="live-dot">LIVE</span> <span id="live-status">connecting…</span>
       <button type="button" id="live-full" class="button" hidden title="Switch between the stream Zoologist watches and the camera's full-resolution stream">Full resolution</button></p>
-    <div id="live-stage"><video id="live-video" muted autoplay playsinline></video></div>
+    <div id="live-tabs" class="segmented" role="group" aria-label="What the live view shows" hidden>
+      <button type="button" data-tab="live" aria-pressed="true">Live</button>
+      <button type="button" data-tab="zones" aria-pressed="false" title="The areas of the picture where motion is ignored (motion_mask)">Masked zones</button>
+    </div>
+    <div id="live-stage"><video id="live-video" muted autoplay playsinline></video><svg id="live-zones" viewBox="0 0 1 1" preserveAspectRatio="none" aria-label="Masked zones" hidden></svg></div>
+    <p id="live-zones-note" class="muted small" hidden>Motion inside the red areas is ignored. They are set with <code>motion_mask</code> in the configuration.</p>
     <p id="live-note" class="note" hidden></p>
   </dialog>
 </body>
