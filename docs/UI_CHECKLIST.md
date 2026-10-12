@@ -45,6 +45,7 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 - ✅ "Load more" appends the next page, still newest first.
 - ☐ A new live event appears at the top, briefly highlighted.
 - ✅ `updated`/`ended` messages replace the tile in place (e.g. "Unidentified animal" turns into "Red fox" when the species arrives).
+- ☐ An event with a full-resolution close-up shows that close-up as its tile picture.
 - ☐ Chart refreshes from live updates happen at most once per 5 s.
 - ☐ The live indicator shows "live" when connected and "reconnecting" when the server is gone.
 
@@ -52,6 +53,7 @@ Items marked ☐ are implemented but not checked by hand yet. Items marked ⬜ n
 
 - ✅ Clicking a tile opens the viewer, showing the title, then camera · start · duration · score, then the scientific name and top-3 species.
 - ✅ The clip autoplays (muted, inline) with controls, and the snapshot is shown below it.
+- ☐ The full-resolution close-up, when there is one, is the last picture, below the snapshot.
 - ✅ The viewer and the live view use the whole window: full width, with the video short enough that the title
   and controls stay in view (checked at 1024×768, 1600×640 and 375×812).
 - ⬜ A pending clip shows the snapshot and "Clip is being prepared…", polls every 3 s, and plays once it is ready.

@@ -361,7 +361,9 @@ function tile(e) {
   const l = LABEL[e.label];
   const pic = el("div", { class: "pic" });
   if (e.thumb_url || e.snapshot_url) {
-    pic.append(el("img", { src: `${API}/events/${e.id}/thumb.jpg`, alt: "", loading: "lazy", width: 320, height: 200 }));
+    // The full-resolution close-up when there is one: it is the clearest picture of the animal.
+    const picture = e.sharp_url ? "sharp.jpg" : "thumb.jpg";
+    pic.append(el("img", { src: `${API}/events/${e.id}/${picture}`, alt: "", loading: "lazy", width: 320, height: 200 }));
   } else {
     pic.append(el("span", { class: "noimg", "aria-hidden": "true" }, l?.icon || "?"));
   }
