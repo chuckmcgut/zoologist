@@ -7,6 +7,7 @@ pub mod app;
 pub mod cli;
 pub mod demo;
 pub mod disk;
+pub mod eval;
 pub mod healthcheck;
 pub mod hub_import;
 pub mod hub_main;

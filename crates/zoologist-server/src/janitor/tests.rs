@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::{Duration, TimeZone, Utc};
 use zoologist_core::{Config, Label};
-use zoologist_store::{ClipState, EventPatch, NewEvent, SegmentRecord, Store};
+use zoologist_store::{ClipState, EventPatch, Feedback, NewEvent, SegmentRecord, Store};
 
 use super::run_once;
 
@@ -184,6 +184,57 @@ fn clips_over_the_size_cap_go_oldest_first_motion_first() {
     );
     assert_eq!(state(old_animal).clip_state, ClipState::Ready);
     assert_eq!(state(new_person).clip_state, ClipState::Ready);
+}
+
+/// Marks event `id` as "nothing there".
+fn mark_wrong(store: &Store, id: u64) {
+    let feedback = Feedback {
+        actual: None,
+        species: None,
+        note: None,
+        at: now(),
+    };
+    store
+        .update_event(
+            id,
+            &EventPatch {
+                feedback: Some(Some(feedback)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn marked_events_keep_their_media_past_clips_days() {
+    let (dir, store, config) = setup();
+    let marked = event(dir.path(), &store, Label::Person, 31 * 24, 100);
+    mark_wrong(&store, marked);
+    let report = run_once(&store, &config, dir.path(), now(), false).unwrap();
+    assert_eq!(report.events_purged, 0, "{:?}", report.actions);
+    let e = store.get_event(marked).unwrap().unwrap();
+    assert_eq!(e.clip_state, ClipState::Ready);
+    for rel in [e.clip_path, e.snapshot_path, e.thumb_path, e.sharp_path] {
+        assert!(dir.path().join(rel.unwrap()).exists());
+    }
+}
+
+#[test]
+fn marked_clips_count_towards_the_cap_but_stay() {
+    let (dir, store, mut config) = setup();
+    config.retention.clips_max_total_mb = 2;
+    let mb = 1024 * 1024;
+    // An old marked clip past clips_days, an older unmarked one, and a new one: 3 MB in all.
+    let marked = event(dir.path(), &store, Label::Motion, 40 * 24, mb);
+    mark_wrong(&store, marked);
+    let old = event(dir.path(), &store, Label::Animal, 30, mb);
+    let new = event(dir.path(), &store, Label::Animal, 2, mb);
+    let report = run_once(&store, &config, dir.path(), now(), false).unwrap();
+    assert_eq!(report.clips_trimmed, 1, "{:?}", report.actions);
+    let state = |id| store.get_event(id).unwrap().unwrap().clip_state;
+    assert_eq!(state(marked), ClipState::Ready);
+    assert_eq!(state(old), ClipState::Purged);
+    assert_eq!(state(new), ClipState::Ready);
 }
 
 #[test]

@@ -178,6 +178,8 @@ it:
 | `detect`, `classify` | run the detector or the species classifier on photos |
 | `bench` | measure how fast the detector is on this machine |
 | `replay --camera ID CLIPS…` | run saved clips through a camera's analysis, to try settings on real footage |
+| `corpus --server URL DIR` | copy the events marked **Wrong** (and a sample of others) with their clips into a folder of test cases |
+| `eval DIR` | replay those test cases with a config and score it: marks fixed or still wrong, other events unchanged or not |
 | `reclassify` | name the animals of stored events again from their clips (prints; `--yes` stores); works while Zoologist runs |
 | `prune` | delete chosen old events with their clips (lists them; `--yes` deletes) |
 | `janitor --dry-run` | show what the retention rules would delete now |
@@ -188,7 +190,21 @@ container with `docker compose exec zoologist zoologist <command> --config /conf
 or in a new one with `docker compose run --rm zoologist <command> …`.
 
 In the dashboard, each event has a **Wrong** button: say what was really there, and the event is kept as
-a test case for tuning detection. Animal events also have **Name again**.
+a test case for tuning detection (its clip is never deleted by the retention rules). Animal events also
+have **Name again**.
+
+Before changing detection settings or code, measure the change on those test cases. `corpus` copies them
+over the HTTP API, so it can run on another computer while Zoologist keeps running; `eval` needs the
+models and a config with the same cameras:
+
+```bash
+zoologist corpus --server http://<server>:8090 corpus/      # run again later to add new marks
+zoologist eval --config zoologist.toml --save before.json corpus/
+# change a setting or the code, then:
+zoologist eval --config zoologist.toml --baseline before.json corpus/
+```
+
+The second run lists the cases that got better or worse, and fails if any got worse.
 
 ## More documentation
 

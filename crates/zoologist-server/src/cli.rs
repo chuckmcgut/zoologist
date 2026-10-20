@@ -147,6 +147,40 @@ pub enum Command {
         main: Option<PathBuf>,
         clips: Vec<PathBuf>,
     },
+    /// Copy the events marked as wrong (and a sample of unmarked ones) from a running Zoologist
+    /// into a folder of test cases for `eval`: each event's JSON and its clip. Run it again to
+    /// add new marks; what is there stays.
+    Corpus {
+        /// The running Zoologist.
+        #[arg(long, default_value = "http://127.0.0.1:8090")]
+        server: String,
+        /// Unmarked events to keep in the folder, as a check that what was right stays right.
+        #[arg(long, default_value_t = 100)]
+        unmarked: usize,
+        /// The unmarked sample is taken from this many of the newest events.
+        #[arg(long, default_value_t = 5000)]
+        scan: usize,
+        dir: PathBuf,
+    },
+    /// Replay the clips of a `corpus` folder with this config and score the result: marked
+    /// events fixed or still wrong, unmarked events found the same or differently.
+    Eval {
+        #[arg(long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+        /// Only this camera (repeat for several).
+        #[arg(long = "camera")]
+        cameras: Vec<String>,
+        /// Labels only: skip the species classifier (faster, but not what the pipeline does).
+        #[arg(long)]
+        no_species: bool,
+        /// Save the results (JSON), to compare a later run with.
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// Results saved by an earlier run: list what changed, and fail if any case got worse.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        dir: PathBuf,
+    },
     /// Delete events of the given cameras and labels from before a date, with their clips and
     /// pictures. Lists what it would delete unless `--yes` is given. Stop Zoologist first.
     Prune {

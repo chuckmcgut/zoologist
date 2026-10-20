@@ -10,6 +10,9 @@
 //! 4. removes empty date directories;
 //! 5. warns when the file system has less than 5 % free.
 //!
+//! Events someone marked as wrong keep their clip and pictures in steps 2 and 3: they are the
+//! test cases of `zoologist eval` (their clips still count towards the size cap).
+//!
 //! With `dry_run`, nothing is changed; the report lists what would be done.
 
 use std::path::Path;
@@ -116,6 +119,9 @@ pub fn run_once(
     let clips_cutoff = now - chrono::Duration::days(i64::from(config.retention.clips_days));
     let epoch = DateTime::<Utc>::UNIX_EPOCH;
     for e in store.events_between(epoch, Some(clips_cutoff))? {
+        if e.feedback.is_some() {
+            continue;
+        }
         let paths: Vec<&String> = [&e.clip_path, &e.snapshot_path, &e.thumb_path, &e.sharp_path]
             .into_iter()
             .flatten()
@@ -153,7 +159,7 @@ pub fn run_once(
         .clips_max_total_mb
         .saturating_mul(1024 * 1024);
     let mut with_clips: Vec<EventRecord> = store
-        .events_between(clips_cutoff, None)?
+        .events_between(epoch, None)?
         .into_iter()
         .filter(|e| e.clip_path.is_some())
         .collect();
@@ -171,6 +177,9 @@ pub fn run_once(
         for e in with_clips {
             if total <= cap {
                 break;
+            }
+            if e.feedback.is_some() {
+                continue;
             }
             let rel = e.clip_path.clone().unwrap_or_default();
             let bytes = e

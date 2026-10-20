@@ -89,6 +89,37 @@ fn main() -> ExitCode {
         } => with_config(&config, |cfg| {
             zoologist_server::replay::replay(cfg, &camera, &clips, min_movement, species, main)
         }),
+        Command::Corpus {
+            server,
+            unmarked,
+            scan,
+            dir,
+        } => match zoologist_server::eval::export(&server, &dir, unmarked, scan)
+            .and_then(|report| zoologist_server::eval::print_export(&report, &dir))
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Eval {
+            config,
+            cameras,
+            no_species,
+            save,
+            baseline,
+            dir,
+        } => with_config(&config, |cfg| {
+            let options = zoologist_server::eval::EvalOptions {
+                corpus: dir,
+                cameras,
+                species: !no_species,
+                save,
+                baseline,
+            };
+            zoologist_server::eval::eval(cfg, &options)
+        }),
         Command::Prune {
             config,
             cameras,

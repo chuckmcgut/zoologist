@@ -561,3 +561,41 @@ narrow one down.
   gets one worker. Live cameras keep `inference.detector`. Off unless set.
 - **Masks.** `/cameras` gives each camera's `motion_mask`, and the live view of a camera that has
   one has a "Masked zones" tab that draws them over the live picture.
+
+## 41. 2026-10-20: The "Wrong" marks are a test suite: `corpus` and `eval`
+
+- **Problem.** Most releases since 0.1.3 tuned detection: wind, thermal cameras, parked vehicles, the
+  second opinion on people, marked spots. Each change was checked by replaying a few clips by eye, so a
+  fix for one camera could quietly break another. Meanwhile the dashboard held 53 events marked wrong,
+  many with what was really there, and the janitor would have deleted their clips in time.
+- **Decision.**
+  - The janitor never deletes the clip or pictures of a marked event (they still count towards
+    `clips_max_total_mb`). Taking the mark back makes them ordinary again.
+  - `zoologist corpus --server URL DIR` copies every marked event (JSON and clip) and a sample of
+    unmarked ones (default 100, spread over cameras and labels, at least a day old) over the HTTP API.
+    It never opens the database, so it runs on another computer while Zoologist keeps running.
+    Running it again adds new marks and refreshes changed ones; the sample stays.
+  - `zoologist eval --config C DIR` replays every clip with the same analysis the Hub importer and
+    `replay` use (one shared `ClipAnalyser`), including the species classifier, and scores it. A mark
+    "nothing there" passes when no person, vehicle or animal is found; a corrected label when it is
+    found and the wrong one is not; a corrected species when an animal is named loosely the same
+    ("deer" matches "white-tailed deer"). An unmarked event passes when it is found as it was.
+    `--save` keeps the results; `--baseline` lists what got better or worse, and fails if anything
+    got worse.
+- **Marked spots.** `species.learn_from_marks` is applied from the corpus's own "nothing" marks, but
+  never an event's own mark (as in the writer), so a chair marked three times counts as caught on
+  the third only if the other two marks cover it.
+- **Not the same as live.** A clip starts a few seconds before its event, so the motion detector
+  warms up on less footage; sharp views from full-resolution snapshots are not available. The
+  scores are for comparing settings with each other, not a promise about the live cameras.
+- **Speed.** Clips are analysed side by side (one per core, at most `inference.queue_capacity`),
+  with as many detector and species workers as cores. Each clip waits for its own jobs, so the
+  queues never drop one and the results do not depend on the number of workers. 153 clips took
+  318 s on the M1 Max (one at a time: over 40 minutes), and two runs gave identical results.
+- **First run** (0.1.16 settings from the VM, 53 marked and 100 unmarked events): 43 of 53 marks are
+  now right, mostly "nothing there" on the Reolink camera (chair, power meter, stumps). Still wrong:
+  people who are also called animals in the same clip (5, on the colour and Reolink cameras), a
+  vehicle also called an animal, a deer and a bird on a battery camera that became motion, a person
+  next to a deer there, and one "nothing" that is still an animal. 86 of 100
+  unmarked events came out the same; most of the 14 others are deer and people on the Reolink
+  camera found as nothing in the clip, worth a look on their own.
