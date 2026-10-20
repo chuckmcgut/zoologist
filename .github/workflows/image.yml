@@ -19,17 +19,10 @@ permissions:
 
 jobs:
   image:
-    name: build and push ${{ matrix.suffix || 'pure Rust' }} (linux/amd64)
+    # One job builds both images, so Zoologist is compiled once: the -ffmpeg image is the
+    # pure-Rust image plus a small ffmpeg, and its build reuses the first build's stages.
+    name: build and push (linux/amd64)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          # The pure-Rust image.
-          - target: runtime
-            suffix: ""
-          # With ffmpeg, for sharp species views from H.265 main recordings (battery cameras).
-          - target: runtime-ffmpeg
-            suffix: "-ffmpeg"
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -42,20 +35,41 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/zoologist
-          flavor: |
-            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+      - id: meta-ffmpeg
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/zoologist
+          flavor: |
+            suffix=-ffmpeg,onlatest=true
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      # The pure-Rust image.
       - uses: docker/build-push-action@v6
         with:
           context: .
-          target: ${{ matrix.target }}
+          target: runtime
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          cache-from: type=gha,scope=image
+      # With ffmpeg, for sharp species views from H.265 main recordings (battery cameras). Its
+      # cache export covers every stage, the Rust build and the ffmpeg build included.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime-ffmpeg
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-ffmpeg.outputs.tags }}
+          labels: ${{ steps.meta-ffmpeg.outputs.labels }}
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,mode=max,scope=image
