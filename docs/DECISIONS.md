@@ -599,3 +599,20 @@ narrow one down.
   next to a deer there, and one "nothing" that is still an animal. 86 of 100
   unmarked events came out the same; most of the 14 others are deer and people on the Reolink
   camera found as nothing in the clip, worth a look on their own.
+
+## 42. 2026-10-20: A small ffmpeg in the `-ffmpeg` image
+
+- **Problem.** The `-ffmpeg` image was Debian with Debian's ffmpeg: 218 MB compressed, of which
+  175 MB was ffmpeg and its libraries (codecs, X11, audio, network) that Zoologist never uses. The
+  pure-Rust image is 24 MB.
+- **Decision.** ffmpeg 7.1.1 is built from source in its own stage with `--disable-everything` and
+  only the parts Zoologist asks for: file and pipe protocols, the MOV/MP4, H.264 and HEVC demuxers
+  and parsers, the H.264 and HEVC decoders, the MJPEG and raw video encoders, the image2pipe and
+  raw video muxers, and the scale/format filters for the pixel format change. No GPL or non-free
+  parts (LGPL). The binary is 4.7 MB and needs only libc and libm, so the `-ffmpeg` image is now the
+  distroless image plus that one file: no shell, uid 65532, as the default image.
+- **Checked** in the distroless base on the VM: a frame of a Hub battery camera's 5120×1440 H.265
+  main recording at 1.5 s came out as a JPEG, and the 100-frame H.264 test stream piped through
+  the decoder gave exactly 100 frames of 640×360.
+- **Source.** The GitHub archive of the `n7.1.1` tag, checked against its SHA-256 (ffmpeg.org timed
+  out from the build machines).
