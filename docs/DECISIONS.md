@@ -616,3 +616,18 @@ narrow one down.
   the decoder gave exactly 100 frames of 640×360.
 - **Source.** The GitHub archive of the `n7.1.1` tag, checked against its SHA-256 (ffmpeg.org timed
   out from the build machines).
+
+## 43. 2026-10-27: A vehicle that waited starts its event when it drives off
+
+- **Problem.** The colour camera made vehicle events of 72, 53, 36 and 21 minutes in one week, with
+  clips of over 1 GB each: 4.2 GB of the 5 GB of clips in the last 300 events. A vehicle already
+  standing in view is followed but is not an event until it moves (decision 22), and the parked rule
+  (decision 20) only ends events, so it never applied. When the vehicle finally drove off, its event
+  was dated from when it was first seen, and the clip held the whole wait. The 5-minute limit then
+  cut it off at the next update, so it showed as one very long event followed by the real one.
+- **Decision.** When a vehicle's movement is confirmed and it had stood there for longer than
+  `tracking.stationary_seconds` before it began to move, its event starts when it began to move.
+  A vehicle that drives in keeps the moment it was first seen.
+- **Checked** with `eval` on the 153 test cases and the VM's 0.1.17 config: the same as 0.1.16
+  (43 of 53 marks right, 86 of 100 unmarked events unchanged), nothing worse. The test clips are
+  short, so the cases do not show the gain; the unit test does.

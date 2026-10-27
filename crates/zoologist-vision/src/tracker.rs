@@ -423,7 +423,13 @@ fn observe(
         } else if has_moved(&track.origin, &det.bbox, cfg.min_movement) {
             // A redrawn box flickers back; a vehicle that drives stays away.
             let since = *track.moving_since.get_or_insert(now);
-            now - since >= chrono::Duration::milliseconds(MOVING_FOR_MS)
+            let moving = now - since >= chrono::Duration::milliseconds(MOVING_FOR_MS);
+            // It stood there longer than a parked object would: its event starts when it
+            // drives off, not when it was first seen (or the clip holds all the waiting).
+            if moving && since - track.first_seen >= stationary {
+                track.first_seen = since;
+            }
+            moving
         } else {
             track.moving_since = None;
             false
@@ -685,6 +691,48 @@ mod tests {
         assert_eq!(starts.len(), 2, "arrival and departure only: {starts:?}");
         assert!(starts[1].0 >= leaving_from, "{starts:?}");
         assert_eq!(ended(&events).len(), 1, "{events:?}");
+    }
+
+    /// The NC200 case of 2026-10-24: a vehicle already standing there is never an event while it
+    /// waits (it has not moved), but when it drives off an hour later, its event must start
+    /// then. It used to start when the vehicle was first seen, so the clip held the whole hour.
+    #[test]
+    fn a_vehicle_that_waited_starts_its_event_when_it_drives_off() {
+        let mut tr = tracker();
+        let car = |x: f32| vec![det(Label::Vehicle, x, 0.5, 0.2, 0.9)];
+        // Ten minutes standing still, 200 ms per frame, then driving off.
+        let mut frames: Vec<Vec<Detection>> = (0..3000).map(|_| car(0.42)).collect();
+        let leaving_from = frames.len();
+        frames.extend((1..=6).map(|i| car(0.42 + i as f32 * 0.08)));
+
+        let events = run(&mut tr, &frames);
+        let starts: Vec<_> = events
+            .iter()
+            .filter_map(|(i, e)| match e {
+                TrackEvent::Confirmed(t) => Some((*i, t.first_seen)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 1, "one event, the departure: {events:?}");
+        assert!(
+            starts[0].1 >= t(leaving_from as i64 * 200),
+            "the event starts when it drives off: {starts:?}"
+        );
+    }
+
+    /// A vehicle that drives in keeps the start of its event at the moment it was first seen.
+    #[test]
+    fn a_vehicle_that_drives_in_starts_its_event_when_first_seen() {
+        let mut tr = tracker();
+        let frames: Vec<Vec<Detection>> = (0..8)
+            .map(|i| vec![det(Label::Vehicle, 0.1 + i as f32 * 0.08, 0.5, 0.2, 0.9)])
+            .collect();
+        let events = run(&mut tr, &frames);
+        let first_seen = events.iter().find_map(|(_, e)| match e {
+            TrackEvent::Confirmed(t) => Some(t.first_seen),
+            _ => None,
+        });
+        assert_eq!(first_seen, Some(t(0)), "{events:?}");
     }
 
     /// Box pairs (first box, box when it would have become an event) logged on a camera facing a
