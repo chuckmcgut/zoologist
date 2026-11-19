@@ -13,7 +13,7 @@ CPU timings in this file are **estimates** until Phase 0 of the implementation p
 
 | # | Constraint | Consequence |
 |---|---|---|
-| C1 | **Target: AMD Ryzen 7 5700U** (Zen 2 "Lucienne", 8 cores / 16 threads, 1.8–4.3 GHz, **15 W TDP**, AVX2+FMA, no AVX-512, Radeon Vega 8 iGPU) | A laptop-class chip. Sustained all-core clocks are ~2.5–3 GHz, so plan for **~55–65 % of a desktop 5600X's throughput**. Every design choice below is about using less CPU |
+| C1 | *(Replaced on 2026-11-18 by an Intel i5-12600H, 16 threads; see `docs/PERFORMANCE.md`. The text below is the original plan.)* **Target: AMD Ryzen 7 5700U** (Zen 2 "Lucienne", 8 cores / 16 threads, 1.8–4.3 GHz, **15 W TDP**, AVX2+FMA, no AVX-512, Radeon Vega 8 iGPU) | A laptop-class chip. Sustained all-core clocks are ~2.5–3 GHz, so plan for **~55–65 % of a desktop 5600X's throughput**. Every design choice below is about using less CPU |
 | C2 | **As fast as possible** | Detector runs only on motion, on small crops at 320 px. Species model runs only a few times per animal. Parallel inference workers. Motion runs on the Y (luma) plane without converting colour. `lto = "fat"`, plus an optional `target-cpu = x86-64-v3` build |
 | C3 | **Avoid `unsafe`; pure Rust where possible** | Our crates use `#![forbid(unsafe_code)]`. Dependencies are pure-Rust crates, and `cargo deny` bans `-sys`/FFI crates. Section 2 lists the places where pure Rust falls short |
 | C4 | **Docker Compose inside a Proxmox VM** | VM CPU type must be `host` (otherwise no AVX2). Static or distroless image. Section 7 covers VM sizing |

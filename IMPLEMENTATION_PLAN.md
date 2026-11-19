@@ -5,6 +5,9 @@ species), and general motion**, records clips of each event, and serves a web da
 charts and clip playback. The UI is modelled on `~/git/birdsong`.
 
 **Target:** AMD Ryzen 7 5700U (Zen 2, 8C/16T, 15 W) in a **Proxmox VM** running **Docker Compose**.
+*Since 2026-11-18 the VM runs on an Intel i5-12600H (4 performance + 8 efficiency cores, 16 threads, AVX2/FMA,
+no AVX-512); measurements are in `docs/PERFORMANCE.md`. The rest of this plan still says 5700U where it was
+written for it.*
 **Priorities:** performance, **no `unsafe` in our code**, **pure Rust wherever the ecosystem allows**.
 **Cameras:** Reolink wired (PoE/Ethernet), Reolink battery cameras behind a **Reolink Home Hub**, and Wyze
 cameras (USB-powered with RTSP firmware, others via `docker-wyze-bridge`, battery models best effort).
@@ -502,7 +505,7 @@ lists, per model: source URL, licence, input shape/layout/normalisation, output 
 
 ### Step 0.3 — tract benchmark on the 5700U VM
 
-**Status:** tool done (`spikes/tract-bench`), and it was run on the dev machine: all models load in tract and match onnxruntime (relative error ≤ 1.2e-5). Results and the detector choice are in `docs/PERFORMANCE.md` and DECISIONS #13. **Still to do:** run it on the 5700U (inside Docker is fine; a VM is not required).
+**Status:** tool done (`spikes/tract-bench`), and it was run on the dev machine: all models load in tract and match onnxruntime (relative error ≤ 1.2e-5). Results and the detector choice are in `docs/PERFORMANCE.md` and DECISIONS #13. The 5700U was replaced before it was benchmarked. On the i5-12600H, `zoologist bench` was run in the live container on 2026-11-18 for sorrel at 320 and 640 (`docs/PERFORMANCE.md`).
 
 **Objective:** Prove every model loads in tract, and measure its speed on the target.
 
@@ -1328,7 +1331,7 @@ the image is < 60 MB (distroless variant), and `docker compose restart` recovers
 
 ### Step 11.4 — Performance pass on the 5700U
 
-**Status:** `scripts/perf-log.sh` is written. The measurements need the 5700U.
+**Status:** partly done, on the i5-12600H instead of the 5700U (2026-11-18, `docs/PERFORMANCE.md`). The detector p95 is 113 ms live, below the 150 ms target, with no drops. Decoding takes under 1 ms per frame on the substreams. Recommended: `inference.workers = 4`, which covers the worst case of 30 regions/s. **Still to do:** a 24 h `scripts/perf-log.sh` run with all cameras streaming, and finding out why one inference takes 99 ms (1.8× the M1 Max).
 
 1. `scripts/perf-log.sh`: curls `/health` every minute into a CSV for 24 h. Also record `docker stats` and the VM's CPU from the Proxmox graphs.
 2. **Targets:** average VM CPU < 40 %; per-camera drops < 5 %; detector p95 < 150 ms; event → clip ready
@@ -1359,7 +1362,7 @@ Same trait, same goldens. Build it in a separate Docker target. Only if Step 11.
    and exposes RTSP only while there is motion, which gives lower latency than Hub import. Evaluate `bairelay-neolink-core` as an
    in-process library (check the licence: Neolink is AGPL-3.0) `[VERIFY]`.
 7. Use Reolink's own AI/motion events (Hub/camera API or ONVIF events) only as a *hint* to run the detector sooner, never as the answer.
-8. iGPU inference with `burn` + `wgpu` (Vulkan). Needs Vega 8 passthrough into the VM (hard on this APU; see STACKS §7) or a move to LXC.
+8. iGPU inference with `burn` + `wgpu` (Vulkan). Needs the iGPU passed through into the VM (now an Intel Iris Xe on the i5-12600H; the Vega 8 notes in STACKS §7 are for the old 5700U) or a move to LXC. Low priority: the CPU keeps up (`docs/PERFORMANCE.md`).
 9. Daily digest with the best clip per species.
 
 ---

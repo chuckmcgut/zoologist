@@ -20,7 +20,7 @@ services:
     # build:
     #   context: .
     #   target: runtime            # or runtime-ffmpeg if [video] decoder = "ffmpeg"
-    #   args: { TARGET_CPU: x86-64-v3 }   # a little faster on the 5700U; the image then needs AVX2
+    #   args: { TARGET_CPU: x86-64-v3 }   # a little faster on an AVX2 CPU; the image then needs AVX2
     restart: unless-stopped
     init: true
     ports: ["8090:8090"]

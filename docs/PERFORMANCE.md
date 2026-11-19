@@ -15,8 +15,50 @@
 | md_v1000_sorrel_640 | 1.0e-6 | 228 ms | 15 |
 | speciesnet (480) | 2.0e-6 | 446 ms | 8 |
 
-Throughput scales almost linearly up to 4 workers. Expect the Ryzen 7 5700U (Zen 2, 15 W, AVX2) to be
-roughly 1.5–2.5× slower per core. **Re-run this on the target machine** (Step 0.3 proper).
+Throughput scales almost linearly up to 4 workers. The planned target was a Ryzen 7 5700U; the production
+machine is now an i5-12600H (next section).
+
+## 2026-11-18: detector speed on the production machine (Intel i5-12600H)
+
+The Zoologist VM moved from the Ryzen 7 5700U to an **Intel Core i5-12600H** (Alder Lake: 4 performance cores
+with 2 threads each, plus 8 efficiency cores, so 16 threads). The VM sees all 16 threads, with AVX2, FMA and
+AVX-VNNI; Intel disables AVX-512 on this chip. The 5700U was never benchmarked before the move.
+
+Run inside the live container (so the pipeline was running alongside, at a load average of about 0.3) with the
+published generic x86-64 image (`sha-9c87f43`):
+
+```sh
+docker compose exec -T zoologist /usr/local/bin/zoologist bench --model md-sorrel --iterations 20 --threads 1,2,4,8,12
+```
+
+| Workers | sorrel 320: p50 ms | p95 ms | detections/s | sorrel 640: p50 ms | p95 ms | detections/s |
+|---|---|---|---|---|---|---|
+| 1 | 98.9 | 103.4 | 10.1 | 401 | 421 | 2.5 |
+| 2 | 103.9 | 107.5 | 19.0 | 415 | 444 | 4.8 |
+| 4 | 107.1 | 114.4 | 36.0 | 436 | 446 | 9.1 |
+| 8 | 112.1 | 234.5 | 47.3 | 462 | 941 | 11.0 |
+| 12 | 133.8 | 262.5 | 54.6 | 679 | 1137 | 12.8 |
+
+The live pipeline agrees: after 3.8 hours, `/health` reported a detector mean of 103 ms and p95 of 113 ms, with no
+dropped frames or detector jobs. Decoding took 0.80 ms per frame for the Reolink container camera and 0.38 ms for
+the NC200 thermal substream. The NC200 colour stream was down, so it could not be measured.
+
+Findings:
+- **Up to 4 workers, throughput scales linearly** and p95 stays flat. With 8 or more, p95 doubles while throughput
+  grows by only another 30–50 %. The likely cause is that the extra workers land on efficiency cores or on the
+  second thread of a busy performance core.
+- **One sorrel-320 inference takes 99 ms, 1.8× the M1 Max's 55 ms.** This is slower than expected for this chip.
+  Possible causes, none checked yet: the host's power limit or CPU governor, the VM's threads running on
+  efficiency cores, or the generic x86-64 build (tract chooses its AVX2/FMA kernels at runtime, but the code
+  around them is compiled for plain x86-64).
+- **Live demand at worst:** three streaming cameras × `detect_fps = 5` × `max_regions_per_frame = 2` = 30
+  regions/s when all of them see motion at once. 3 workers manage about 27/s and **4 workers about 36/s**, so 4 is
+  the setting that covers the worst case.
+- **sorrel 640 is too slow for live streams** (9 per second with 4 workers). It suits Hub imports, which run in
+  the background queue and can wait.
+- **`detect_fps = 10` on every camera** would double the worst case to 60 regions/s, more than even 12 workers
+  manage. Raise it on one camera at most.
+- The plan's target of a detector p95 below 150 ms (Step 11.4) is met.
 
 ## 2026-09-18: detection quality on the test photos (whole photo stretched to S×S)
 
@@ -68,4 +110,5 @@ Decoding time follows the **bitrate** more than the pixel count: the 9.7 Mbit/s 
 frame than the 1536×432 stream at 0.4 Mbit/s. Every frame has to be decoded (later frames depend on earlier ones),
 so that stream uses about 8 ms × 29 fps ≈ 24 % of one M1 core. The 5700U is probably about twice as slow per
 core, which is still inside the plan's budget (≤ 15 ms per frame). Capping that camera at about 4 Mbit/s would
-roughly halve the cost.
+roughly halve the cost. (It was capped at about 4 Mbit/s on 2026-09-26. For figures from the production
+machine, see the i5-12600H section above.)

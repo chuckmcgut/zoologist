@@ -4,7 +4,7 @@
 #
 #   docker compose build                      # default target: runtime (distroless, pure-Rust decoder)
 #   docker build --target runtime-ffmpeg .    # plus a small ffmpeg: battery cameras' H.265 recordings
-#   docker build --build-arg TARGET_CPU=x86-64-v3 .   # AVX2 build for the Ryzen 5700U (needs CPU type "host")
+#   docker build --build-arg TARGET_CPU=x86-64-v3 .   # AVX2 build for the target CPU (needs VM CPU type "host")
 #   docker build --build-arg STRIP=none .              # keep line tables for `perf` (image ~150 MB larger)
 #
 # Models are not baked in: mount them at /models (see docs/MODELS.md).
